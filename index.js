@@ -111,7 +111,6 @@ if (userText.includes(",")) {
     try {
   } catch (err) {
     console.log("Erreur webhook :", err);
-  }
 });
 
 // ===============================
