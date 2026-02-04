@@ -45,6 +45,9 @@ if (GOOGLE_CREDENTIALS) {
 
 // ================== WEBHOOK TELEGRAM ==================
 app.post("/webhook", async (req, res) => {
+    console.log("📩 Webhook appelé !");
+console.log(JSON.stringify(req.body, null, 2));
+
   try {
     const message = req.body.message;
     if (!message || !message.text) {
@@ -53,6 +56,13 @@ app.post("/webhook", async (req, res) => {
 
     const chatId = message.chat.id;
     const userText = message.text;
+    await axios.post(
+  `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
+  {
+    chat_id: chatId,
+    text: "✅ Message reçu : " + userText,
+  }
+);
 
         // ✅ TEST VENTE SIMPLE
     if (text.includes(",")) {
