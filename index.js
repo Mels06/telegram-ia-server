@@ -1,158 +1,110 @@
-// ================== IMPORTS ==================
+// ===============================
+// ✅ BOT TELEGRAM + GOOGLE SHEET
+// via Apps Script (PROPRE)
+// ===============================
+
+require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
-const { google } = require("googleapis");
 
-// ================== APP ==================
 const app = express();
 app.use(express.json());
- 
-// ✅ Fonction pour lire une vente envoyée par message
-function parseVente(text) {
-  const parts = text.split(",");
 
-  // On attend : Nom, Modèle, Prix
-  if (parts.length < 3) return null;
+// ===============================
+// ✅ Ton URL Apps Script
+// ===============================
+const SCRIPT_URL =
+  "https://script.google.com/macros/s/AKfycbwBJjWvypfxR_Z2ZOaOLQyOV0js2r3pLrUwEG_FFV4sYQGTnrRwFuIdb4djrWuiIuUwNA/exec";
 
-  return {
-    nom: parts[0].trim(),
-    modele: parts[1].trim(),
-    prix: Number(parts[2].trim()),
-  };
+// ===============================
+// ✅ Envoyer message Telegram
+// ===============================
+async function sendTelegram(chatId, text) {
+  await axios.post(
+    `https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/sendMessage`,
+    {
+      chat_id: chatId,
+      text: text,
+    }
+  );
 }
 
-app.get("/", (req, res) => {
-  res.send("✅ Serveur Telegram IA actif");
-});
-
-// ================== VARIABLES D’ENV ==================
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "";
-const OPENAI_KEY = process.env.OPENAI_KEY || "";
-const SHEET_ID = process.env.SHEET_ID || "";
-const GOOGLE_CREDENTIALS = process.env.GOOGLE_CREDENTIALS || "";
-
-// ================== GOOGLE SHEETS (SAFE INIT) ==================
-let sheets = null;
-
-if (GOOGLE_CREDENTIALS) {
-  const auth = new google.auth.GoogleAuth({
-    credentials: JSON.parse(GOOGLE_CREDENTIALS),
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+// ===============================
+// ✅ Envoyer vente au Google Sheet
+// ===============================
+async function addSaleToSheet(nom, telephone, produit, prix, quantite) {
+  await axios.post(SCRIPT_URL, {
+    nom,
+    telephone,
+    produit,
+    prix: Number(prix),
+    quantite: Number(quantite),
   });
-
-  sheets = google.sheets({ version: "v4", auth });
 }
 
-// ================== WEBHOOK TELEGRAM ==================
+// ===============================
+// ✅ WEBHOOK TELEGRAM
+// ===============================
 app.post("/webhook", async (req, res) => {
-    console.log("📩 Webhook appelé !");
-console.log(JSON.stringify(req.body, null, 2));
+  // Telegram veut une réponse immédiate
+  res.status(200).send("OK");
 
   try {
     const message = req.body.message;
-    if (!message || !message.text) {
-      return res.sendStatus(200);
-    }
+    if (!message || !message.text) return;
 
     const chatId = message.chat.id;
     const userText = message.text;
-    await axios.post(
-  `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
-  {
-    chat_id: chatId,
-    text: "✅ Message reçu : " + userText,
-  }
-);
 
-        // ✅ TEST VENTE SIMPLE
-    if (text.includes(",")) {
+    console.log("Message reçu :", userText);
 
-      const vente = parseVente(text);
+    // ===============================
+    // ✅ Vente = 5 infos séparées par virgules
+    // ===============================
+    if (userText.includes(",")) {
+      const parts = userText.split(",");
 
-      if (!vente) {
-        await axios.post(
-          `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
-          {
-            chat_id: chatId,
-            text: "❌ Format invalide. Exemple : Melissa, Blue Céline, 20000"
-          }
+      if (parts.length < 5) {
+        await sendTelegram(
+          chatId,
+          "❌ Format attendu : Nom, Téléphone, Produit, Prix, Quantité"
         );
-        return res.sendStatus(200);
+        return;
       }
 
-      await axios.post(
-        `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
-        {
-          chat_id: chatId,
-          text: `✅ Vente reçue : ${vente.nom} / ${vente.modele} / ${vente.prix} FCFA`
-        }
+      const nom = parts[0].trim();
+      const telephone = parts[1].trim();
+      const produit = parts[2].trim();
+      const prix = parts[3].trim();
+      const quantite = parts[4].trim();
+
+      // Enregistrer dans Google Sheet
+      await addSaleToSheet(nom, telephone, produit, prix, quantite);
+
+      await sendTelegram(
+        chatId,
+        `✅ Vente enregistrée : ${produit} x${quantite}`
       );
 
-      return res.sendStatus(200);
+      return;
     }
 
-    // ===== IA =====
-    let extractedText = userText;
-
-    if (OPENAI_KEY) {
-      const aiResponse = await axios.post(
-        "https://api.openai.com/v1/chat/completions",
-        {
-          model: "gpt-4o-mini",
-          messages: [
-            {
-              role: "system",
-              content:
-                "Tu es un assistant professionnel. Tu aides à structurer des informations pour un Google Sheet.",
-            },
-            { role: "user", content: userText },
-          ],
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${OPENAI_KEY}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      extractedText = aiResponse.data.choices[0].message.content;
-    }
-
-    // ===== GOOGLE SHEET (SI CONFIGURÉ) =====
-    if (sheets && SHEET_ID) {
-      await sheets.spreadsheets.values.append({
-        spreadsheetId: SHEET_ID,
-        range: "Sheet1!A1",
-        valueInputOption: "RAW",
-        requestBody: {
-          values: [[new Date().toISOString(), extractedText]],
-        },
-      });
-    }
-
-    // ===== RÉPONSE TELEGRAM =====
-    if (TELEGRAM_TOKEN) {
-      await axios.post(
-        `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
-        {
-          chat_id: chatId,
-          text: "✅ Information bien reçue et traitée.",
-        }
-      );
-    }
-
-    res.sendStatus(200);
+    // ===============================
+    // ✅ Message normal
+    // ===============================
+    await sendTelegram(
+      chatId,
+      "💡 Envoie une vente comme : Nom, Téléphone, Produit, Prix, Quantité"
+    );
   } catch (err) {
-    console.error("ERREUR :", err.message);
-    res.sendStatus(500);
+    console.log("Erreur webhook :", err);
   }
 });
 
-// ================== START SERVER ==================
+// ===============================
+// ✅ Lancer serveur
+// ===============================
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, () => {
-  console.log(`🚀 Serveur démarré sur le port ${PORT}`);
+  console.log("Serveur démarré sur le port", PORT);
 });
-
