@@ -6,6 +6,24 @@ const { google } = require("googleapis");
 // ================== APP ==================
 const app = express();
 app.use(express.json());
+ 
+// ✅ Fonction pour lire une vente envoyée par message
+function parseVente(text) {
+  const parts = text.split(",");
+
+  // On attend : Nom, Modèle, Prix
+  if (parts.length < 3) return null;
+
+  return {
+    nom: parts[0].trim(),
+    modele: parts[1].trim(),
+    prix: Number(parts[2].trim()),
+  };
+}
+
+app.get("/", (req, res) => {
+  res.send("✅ Serveur Telegram IA actif");
+});
 
 // ================== VARIABLES D’ENV ==================
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "";
@@ -35,6 +53,33 @@ app.post("/webhook", async (req, res) => {
 
     const chatId = message.chat.id;
     const userText = message.text;
+
+        // ✅ TEST VENTE SIMPLE
+    if (text.includes(",")) {
+
+      const vente = parseVente(text);
+
+      if (!vente) {
+        await axios.post(
+          `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
+          {
+            chat_id: chatId,
+            text: "❌ Format invalide. Exemple : Melissa, Blue Céline, 20000"
+          }
+        );
+        return res.sendStatus(200);
+      }
+
+      await axios.post(
+        `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
+        {
+          chat_id: chatId,
+          text: `✅ Vente reçue : ${vente.nom} / ${vente.modele} / ${vente.prix} FCFA`
+        }
+      );
+
+      return res.sendStatus(200);
+    }
 
     // ===== IA =====
     let extractedText = userText;
