@@ -64,30 +64,42 @@ app.post("/webhook", async (req, res) => {
     if (userText.includes(",")) {
       const parts = userText.split(",");
 
-      if (parts.length < 5) {
-        await sendTelegram(
-          chatId,
-          "❌ Format attendu : Nom, Téléphone, Produit, Prix, Quantité"
-        );
-        return;
-      }
+    // ✅ Si l’utilisateur envoie une vente
+if (userText.includes(",")) {
 
-      const nom = parts[0].trim();
-      const telephone = parts[1].trim();
-      const produit = parts[2].trim();
-      const prix = parts[3].trim();
-      const quantite = parts[4].trim();
+  const parts = userText.split(",");
 
-      // Enregistrer dans Google Sheet
-      await addSaleToSheet(nom, telephone, produit, prix, quantite);
+  // ✅ On attend exactement 5 infos
+  if (parts.length < 5) {
+    await sendTelegram(chatId,
+      "❌ Format attendu : Nom, Téléphone, Produit, Prix, Quantité"
+    );
+    return;
+  }
 
-      await sendTelegram(
-        chatId,
-        `✅ Vente enregistrée : ${produit} x${quantite}`
-      );
+  const nom = parts[0].trim();
+  const telephone = parts[1].trim();
+  const produit = parts[2].trim();
+  const prix = parts[3].trim();
+  const quantite = parts[4].trim();
 
-      return;
-    }
+  // ✅ Envoyer à Google Sheet
+  await axios.post(SCRIPT_URL, {
+    nom,
+    telephone,
+    produit,
+    prix,
+    quantite
+  });
+
+  // ✅ Confirmation Telegram
+  await sendTelegram(chatId,
+    `✅ Vente enregistrée : ${nom} / ${produit} / ${prix} FCFA x${quantite}`
+  );
+
+  return;
+}
+
 
     // ===============================
     // ✅ Message normal
