@@ -108,6 +108,7 @@ if (userText.includes(",")) {
       chatId,
       "💡 Envoie une vente comme : Nom, Téléphone, Produit, Prix, Quantité"
     );
+    try {
   } catch (err) {
     console.log("Erreur webhook :", err);
   }
