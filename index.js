@@ -11,7 +11,7 @@ const app = express();
 app.use(express.json());
 
 // ===============================
-// ✅ Ton URL Apps Script
+// ✅ URL Apps Script
 // ===============================
 const SCRIPT_URL =
   "https://script.google.com/macros/s/AKfycbwBJjWvypfxR_Z2ZOaOLQyOV0js2r3pLrUwEG_FFV4sYQGTnrRwFuIdb4djrWuiIuUwNA/exec";
@@ -46,12 +46,12 @@ async function addSaleToSheet(nom, telephone, produit, prix, quantite) {
 // ✅ WEBHOOK TELEGRAM
 // ===============================
 app.post("/webhook", async (req, res) => {
-  // Telegram veut une réponse immédiate
-  res.status(200).send("OK");
-
   try {
     const message = req.body.message;
-    if (!message || !message.text) return;
+
+    if (!message || !message.text) {
+      return res.sendStatus(200);
+    }
 
     const chatId = message.chat.id;
     const userText = message.text;
@@ -64,42 +64,32 @@ app.post("/webhook", async (req, res) => {
     if (userText.includes(",")) {
       const parts = userText.split(",");
 
-    // ✅ Si l’utilisateur envoie une vente
-if (userText.includes(",")) {
+      // ✅ On attend exactement 5 infos
+      if (parts.length < 5) {
+        await sendTelegram(
+          chatId,
+          "❌ Format attendu : Nom, Téléphone, Produit, Prix, Quantité"
+        );
+        return res.sendStatus(200);
+      }
 
-  const parts = userText.split(",");
+      const nom = parts[0].trim();
+      const telephone = parts[1].trim();
+      const produit = parts[2].trim();
+      const prix = parts[3].trim();
+      const quantite = parts[4].trim();
 
-  // ✅ On attend exactement 5 infos
-  if (parts.length < 5) {
-    await sendTelegram(chatId,
-      "❌ Format attendu : Nom, Téléphone, Produit, Prix, Quantité"
-    );
-    return;
-  }
+      // ✅ Ajouter dans Google Sheet
+      await addSaleToSheet(nom, telephone, produit, prix, quantite);
 
-  const nom = parts[0].trim();
-  const telephone = parts[1].trim();
-  const produit = parts[2].trim();
-  const prix = parts[3].trim();
-  const quantite = parts[4].trim();
+      // ✅ Confirmation Telegram
+      await sendTelegram(
+        chatId,
+        `✅ Vente enregistrée : ${nom} / ${produit} / ${prix} FCFA x${quantite}`
+      );
 
-  // ✅ Envoyer à Google Sheet
-  await axios.post(SCRIPT_URL, {
-    nom,
-    telephone,
-    produit,
-    prix,
-    quantite
-  });
-
-  // ✅ Confirmation Telegram
-  await sendTelegram(chatId,
-    `✅ Vente enregistrée : ${nom} / ${produit} / ${prix} FCFA x${quantite}`
-  );
-
-  return;
-}
-
+      return res.sendStatus(200);
+    }
 
     // ===============================
     // ✅ Message normal
@@ -108,15 +98,17 @@ if (userText.includes(",")) {
       chatId,
       "💡 Envoie une vente comme : Nom, Téléphone, Produit, Prix, Quantité"
     );
-    try {
+
+    return res.sendStatus(200);
   } catch (err) {
     console.log("Erreur webhook :", err);
-};
+    return res.sendStatus(200);
+  }
+});
 
-// ===============================
+// ==============================
 // ✅ Lancer le serveur
-// ===============================
-
+// ==============================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
