@@ -40,13 +40,22 @@ app.get("/", (req, res) => {
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
 
-  const message = req.body.message;
-  if (!message || !message.text) return;
+  try {
+    const message = req.body.message;
+    if (!message || !message.text) return;
 
-  const chatId = message.chat.id;
-  const userText = message.text;
+    const chatId = message.chat.id;
+    const userText = message.text;
 
-  console.log("Message reçu :", userText);
+    console.log("✅ Message reçu :", userText);
+
+    // TEST réponse directe
+    await sendTelegram(chatId, "✅ Je te réponds bien !");
+
+  } catch (err) {
+    console.log("❌ ERREUR WEBHOOK :", err.response?.data || err.message);
+  }
+});
 
   // ✅ Vente format
   if (userText.includes(",")) {
