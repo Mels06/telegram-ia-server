@@ -81,6 +81,10 @@ app.post("/webhook", async (req, res) => {
 
 // ✅ Lancer serveur
 const PORT = process.env.PORT || 3000;
+app.get("/", (req, res) => {
+  res.send("OK SERVER RUNNING");
+});
+
 app.listen(PORT, () => {
   console.log("Serveur démarré sur le port", PORT);
 });
