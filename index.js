@@ -5,13 +5,13 @@ const axios = require("axios");
 const app = express();
 app.use(express.json());
 
-// ✅ URL Google Apps Script
+// ✅ URL Apps Script Google Sheet
 const SCRIPT_URL =
   "https://script.google.com/macros/s/AKfycbwBJjWvypfxR_Z2ZOaOLQyOV0js2r3pLrUwEG_FFV4sYQGTnrRwFuIdb4djrWuiIuUwNA/exec";
 
-// ✅ Fonction envoyer message Telegram
+// ✅ Fonction Telegram
 async function sendTelegram(chatId, text) {
-  await axios.post(
+  return axios.post(
     `https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/sendMessage`,
     {
       chat_id: chatId,
@@ -20,9 +20,9 @@ async function sendTelegram(chatId, text) {
   );
 }
 
-// ✅ Fonction envoyer vente à Google Sheet
+// ✅ Fonction Google Sheet
 async function addSaleToSheet(nom, telephone, produit, prix, quantite) {
-  await axios.post(SCRIPT_URL, {
+  return axios.post(SCRIPT_URL, {
     nom,
     telephone,
     produit,
@@ -31,7 +31,7 @@ async function addSaleToSheet(nom, telephone, produit, prix, quantite) {
   });
 }
 
-// ✅ WEBHOOK TELEGRAM
+// ✅ Webhook Telegram
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
 
@@ -42,9 +42,9 @@ app.post("/webhook", async (req, res) => {
     const chatId = message.chat.id;
     const userText = message.text;
 
-    console.log("✅ Message reçu :", userText);
+    console.log("Message reçu :", userText);
 
-    // ✅ Si c’est une vente (5 infos séparées par virgule)
+    // ✅ Vente détectée
     if (userText.includes(",")) {
       const parts = userText.split(",");
 
@@ -74,23 +74,23 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    // ✅ Sinon message d’aide
+    // ✅ Message normal
     await sendTelegram(
       chatId,
       "💡 Envoie une vente comme : Nom, Téléphone, Produit, Prix, Quantité"
     );
   } catch (err) {
-    console.log("❌ ERREUR :", err.message);
+    console.log("Erreur webhook :", err);
   }
 });
 
-// ✅ Route test Render
+// ✅ Test serveur
 app.get("/", (req, res) => {
   res.send("OK SERVER RUNNING ✅");
 });
 
-// ✅ Lancer serveur
+// ✅ Start serveur Render
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("🚀 Serveur démarré sur le port", PORT);
+  console.log("Serveur démarré sur le port", PORT);
 });
