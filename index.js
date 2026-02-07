@@ -35,12 +35,11 @@ async function sendTelegram(chatId, text) {
 // ===============================
 async function addSaleToSheet(nom, telephone, produit, prix, quantite) {
   return axios.post(SCRIPT_URL, {
-    nom,
-    telephone,
-    produit,
-    prix: Number(prix),
-    quantite: Number(quantite),
-  });
+  nom_complet: nom,
+  telephone: telephone,
+  produit: produit,
+  prix_unitaire: prix,
+  quantite: quantite
 }
 
 // ===============================
@@ -81,7 +80,7 @@ app.post("/webhook", async (req, res) => {
         return;
       }
 
-      const nom = parts[0].trim();
+      const nom_complet = parts[0].trim();
       const telephone = parts[1].trim();
       const produit = parts[2].trim();
       const prix = parts[3].trim();
