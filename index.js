@@ -80,7 +80,7 @@ app.post("/webhook", async (req, res) => {
         return;
       }
 
-      const nom_complet = parts[0].trim();
+      const nom = parts[0].trim();
       const telephone = parts[1].trim();
       const produit = parts[2].trim();
       const prix = parts[3].trim();
