@@ -87,17 +87,13 @@ app.post("/webhook", async (req, res) => {
       const prix = parts[3].trim();
       const quantite = parts[4].trim();
 
-      // Vérification nombres
       if (isNaN(prix) || isNaN(quantite)) {
-        await sendTelegram(
-          chatId,
-          "❌ Prix et quantité doivent être des nombres."
-        );
-        return;
-      }
+  await sendTelegram(chatId, "❌ Prix et quantité doivent être des nombres.");
+  return;
+}
 
       // Envoi vers Google Sheet
-      await addSaleToSheet(nom_complet, telephone, produit, prix, quantite);
+      await addSaleToSheet(nom_complet, telephone, produit, prix, quantite, montant);
 
       // Confirmation Telegram
       const montant = Number(prix) * Number(quantite);
