@@ -38,7 +38,7 @@ async function addSaleToSheet(
   nom_complet,
   telephone,
   produit,
-  _prix_unitaire,
+  prix,
   quantite,
   montant
 ) {
