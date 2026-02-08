@@ -38,7 +38,7 @@ async function addSaleToSheet(
   nom_complet,
   telephone,
   produit,
-  prix,
+  _prix_unitaire,
   quantite,
   montant
 ) {
@@ -55,7 +55,7 @@ async function addSaleToSheet(
 // ===============================
 // ✅ Route test Render
 // ===============================
-app.get("/", (req, res) => {
+app.get("/", (_req, res) => {
   res.send("✅ OK SERVER RUNNING");
 });
 
@@ -92,7 +92,7 @@ app.post("/webhook", async (req, res) => {
       const nom_complet = parts[0].trim();
       const telephone = parts[1].trim();
       const produit = parts[2].trim();
-      const prix = parts[3].trim();
+      const prix_unitaire = parts[3].trim();
       const quantite = parts[4].trim();
 
       // Vérification nombres
@@ -109,7 +109,7 @@ app.post("/webhook", async (req, res) => {
         nom_complet,
         telephone,
         produit,
-        prix,
+        prix_unitaire,
         quantite,
         montant
       );
@@ -117,7 +117,7 @@ app.post("/webhook", async (req, res) => {
       // Confirmation Telegram
       await sendTelegram(
         chatId,
-        `✅ Vente enregistrée : ${nom_complet} / ${produit} / ${prix} FCFA x${quantite} = ${montant} FCFA`
+        `✅ Vente enregistrée : ${nom_complet} / ${produit} / ${prix_unitaire} FCFA x${quantite} = ${montant} FCFA`
       );
 
       return;
