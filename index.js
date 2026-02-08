@@ -1,17 +1,9 @@
-// ===============================
-// ✅ BOT TELEGRAM + GOOGLE SHEET
-// ===============================
-
 require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
 
 const app = express();
 app.use(express.json());
-
-// ===============================
-// ✅ CONFIG
-// ===============================
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 
@@ -38,13 +30,13 @@ async function addSaleToSheet(nom, telephone, produit, quantite) {
   await axios.post(SCRIPT_URL, {
     nom_complet: nom,
     telephone: telephone,
-    produit: produit,
+    produit: produit.toUpperCase(),
     quantite: Number(quantite),
   });
 }
 
 // ===============================
-// ✅ Test Render
+// ✅ Route test Render
 // ===============================
 app.get("/", (_req, res) => {
   res.send("✅ OK SERVER RUNNING");
@@ -66,15 +58,29 @@ app.post("/webhook", async (req, res) => {
     console.log("📩 Message reçu :", userText);
 
     // ===============================
-    // ✅ Vente : Nom, Téléphone, Produit, Quantité
+    // ✅ Réponse Bonjour
+    // ===============================
+    if (
+      userText.toLowerCase() === "bonjour" ||
+      userText.toLowerCase() === "salut"
+    ) {
+      await sendTelegram(
+        chatId,
+        "👋 Bonjour ! Je suis ton assistant.\n\n📌 Envoie une vente comme :\nNom, Téléphone, Produit, Quantité\n\nExemple : Mélissa, 56565655, BLUE, 2"
+      );
+      return;
+    }
+
+    // ===============================
+    // ✅ Vente : 4 champs EXACTS
     // ===============================
     if (userText.includes(",")) {
       const parts = userText.split(",");
 
-      if (parts.length < 4) {
+      if (parts.length !== 4) {
         await sendTelegram(
           chatId,
-          "❌ Format attendu : Nom, Téléphone, Produit, Quantité"
+          "❌ Format exact : Nom, Téléphone, Produit, Quantité\nExemple : Mélissa, 56565655, BLUE, 2"
         );
         return;
       }
@@ -89,10 +95,8 @@ app.post("/webhook", async (req, res) => {
         return;
       }
 
-      // ✅ Envoyer à Google Sheet
       await addSaleToSheet(nom, telephone, produit, quantite);
 
-      // ✅ Confirmation
       await sendTelegram(
         chatId,
         `✅ Vente enregistrée : ${nom} / ${produit} x${quantite}`
@@ -101,10 +105,12 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    // Message aide
+    // ===============================
+    // ✅ Sinon → aide
+    // ===============================
     await sendTelegram(
       chatId,
-      "💡 Exemple : Mélissa, 56565655, Blue, 2"
+      "💡 Je n’ai pas compris.\n\n📌 Envoie :\nNom, Téléphone, Produit, Quantité\n\nOu tape Bonjour."
     );
   } catch (err) {
     console.log("❌ Erreur webhook :", err.message);
