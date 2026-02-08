@@ -13,10 +13,8 @@ app.use(express.json());
 // ✅ CONFIGURATION
 // ===============================
 
-// Token Telegram (Render > Environment)
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 
-// URL Apps Script (Web App)
 const SCRIPT_URL =
   "https://script.google.com/macros/s/AKfycbwBJjWvypfxR_Z2ZOaOLQyOV0js2r3pLrUwEG_FFV4sYQGTnrRwFuIdb4djrWuiIuUwNA/exec";
 
@@ -41,7 +39,8 @@ async function addSaleToSheet(
   telephone,
   produit,
   prix,
-  quantite
+  quantite,
+  montant
 ) {
   await axios.post(SCRIPT_URL, {
     nom_complet: nom_complet,
@@ -54,7 +53,7 @@ async function addSaleToSheet(
 }
 
 // ===============================
-// ✅ Route de test Render
+// ✅ Route test Render
 // ===============================
 app.get("/", (req, res) => {
   res.send("✅ OK SERVER RUNNING");
@@ -64,7 +63,6 @@ app.get("/", (req, res) => {
 // ✅ Webhook Telegram
 // ===============================
 app.post("/webhook", async (req, res) => {
-  // Telegram exige une réponse immédiate
   res.sendStatus(200);
 
   try {
@@ -77,8 +75,7 @@ app.post("/webhook", async (req, res) => {
     console.log("📩 Message reçu :", userText);
 
     // ===============================
-    // ✅ Si l'utilisateur envoie une vente
-    // Format : Nom, Téléphone, Produit, Prix, Quantité
+    // ✅ Vente : Nom, Téléphone, Produit, Prix, Quantité
     // ===============================
     if (userText.includes(",")) {
       const parts = userText.split(",");
@@ -91,27 +88,23 @@ app.post("/webhook", async (req, res) => {
         return;
       }
 
-      // Extraction des données
+      // Extraction
       const nom_complet = parts[0].trim();
       const telephone = parts[1].trim();
       const produit = parts[2].trim();
       const prix = parts[3].trim();
       const quantite = parts[4].trim();
 
-      // ✅ Calcul automatique du montant total
-const montant = Number(prix) * Number(quantite);
+      // Vérification nombres
+      if (isNaN(prix) || isNaN(quantite)) {
+        await sendTelegram(chatId, "❌ Prix et quantité doivent être des nombres.");
+        return;
+      }
 
-// ✅ Enregistrer dans Google Sheet
-await addSaleToSheet(
-  nom_complet,
-  telephone,
-  produit,
-  prix,
-  quantite,
-  montant
-);
+      // Calcul montant total
+      const montant = Number(prix) * Number(quantite);
 
-      // Enregistrer dans Google Sheet
+      // Envoi vers Google Sheet
       await addSaleToSheet(
         nom_complet,
         telephone,
@@ -121,23 +114,16 @@ await addSaleToSheet(
         montant
       );
 
-      if (isNaN(prix) || isNaN(quantite)) {
-  await sendTelegram(chatId, "❌ Prix et quantité doivent être des nombres.");
-  return;
-}
-
       // Confirmation Telegram
       await sendTelegram(
         chatId,
-        `✅ Vente enregistrée : ${nom_complet} / ${produit} / ${prix} FCFA x${quantite}`
+        `✅ Vente enregistrée : ${nom_complet} / ${produit} / ${prix} FCFA x${quantite} = ${montant} FCFA`
       );
 
       return;
     }
 
-    // ===============================
-    // ✅ Message d’aide si format incorrect
-    // ===============================
+    // Message aide
     await sendTelegram(
       chatId,
       "💡 Envoie une vente comme : Nom, Téléphone, Produit, Prix, Quantité"
@@ -146,7 +132,6 @@ await addSaleToSheet(
     console.log("❌ Erreur webhook :", err.message);
   }
 });
-
 
 // ===============================
 // ✅ Lancer le serveur Render
