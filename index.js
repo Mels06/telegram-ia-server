@@ -41,7 +41,8 @@ async function addSaleToSheet(
   telephone,
   produit,
   prix,
-  quantite
+  quantite,
+  montant
 ) {
   await axios.post(SCRIPT_URL, {
     nom_complet: nom_complet,
@@ -49,6 +50,7 @@ async function addSaleToSheet(
     produit: produit,
     prix_unitaire: Number(prix),
     quantite: Number(quantite),
+    montant_total: Number(montant),
   });
 }
 
