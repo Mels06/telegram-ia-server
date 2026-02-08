@@ -32,8 +32,8 @@ async function addSaleToSheet(nom, telephone, produit, prix, quantite) {
     nom_complet: nom,
     telephone: telephone,
     produit: produit,
-    prix_unitaire: prix,
-    quantite: quantite,
+    prix_unitaire: Number(prix),
+    quantite: Number(quantite),
   });
 }
 
