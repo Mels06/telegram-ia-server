@@ -40,7 +40,7 @@ async function sendTelegram(chatId, text) {
 // ===============================
 async function askGPT(question) {
   const response = await client.chat.completions.create({
-    model: "gpt-4o-mini",
+    model: "gpt-3.5-turbo",
     messages: [
       { role: "system", content: "Tu es un assistant utile et clair." },
       { role: "user", content: question },
