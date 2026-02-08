@@ -34,21 +34,13 @@ async function sendTelegram(chatId, text) {
 // ===============================
 // ✅ Ajouter une vente dans Google Sheet
 // ===============================
-async function addSaleToSheet(
-  nom_complet,
-  telephone,
-  produit,
-  prix,
-  quantite,
-  montant
-) {
+async function addSaleToSheet(nom_complet, telephone, produit, prix, quantite) {
   await axios.post(SCRIPT_URL, {
     nom_complet: nom_complet,
     telephone: telephone,
     produit: produit,
     prix_unitaire: Number(prix),
     quantite: Number(quantite),
-    montant_total: Number(montant),
   });
 }
 
@@ -92,32 +84,27 @@ app.post("/webhook", async (req, res) => {
       const nom_complet = parts[0].trim();
       const telephone = parts[1].trim();
       const produit = parts[2].trim();
-      const prix_unitaire = parts[3].trim();
+      const prix = parts[3].trim();
       const quantite = parts[4].trim();
 
       // Vérification nombres
       if (isNaN(prix) || isNaN(quantite)) {
-        await sendTelegram(chatId, "❌ Prix et quantité doivent être des nombres.");
+        await sendTelegram(
+          chatId,
+          "❌ Prix et quantité doivent être des nombres."
+        );
         return;
       }
 
-      // Calcul montant total
-      const montant = Number(prix) * Number(quantite);
-
       // Envoi vers Google Sheet
-      await addSaleToSheet(
-        nom_complet,
-        telephone,
-        produit,
-        prix_unitaire,
-        quantite,
-        montant
-      );
+      await addSaleToSheet(nom_complet, telephone, produit, prix, quantite);
 
       // Confirmation Telegram
+      const montant = Number(prix) * Number(quantite);
+
       await sendTelegram(
         chatId,
-        `✅ Vente enregistrée : ${nom_complet} / ${produit} / ${prix_unitaire} FCFA x${quantite} = ${montant} FCFA`
+        `✅ Vente enregistrée : ${nom_complet} / ${produit} / ${prix} FCFA x${quantite} = ${montant} FCFA`
       );
 
       return;
