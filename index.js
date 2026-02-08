@@ -1,18 +1,37 @@
+// ======================================
+// ✅ TELEGRAM BOT + GOOGLE SHEET + GPT
+// ======================================
+
 require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
+const OpenAI = require("openai");
 
 const app = express();
 app.use(express.json());
 
+// ======================================
+// ✅ CONFIG
+// ======================================
+
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 const SCRIPT_URL =
   "https://script.google.com/macros/s/AKfycbwBJjWvypfxR_Z2ZOaOLQyOV0js2r3pLrUwEG_FFV4sYQGTnrRwFuIdb4djrWuiIuUwNA/exec";
 
-// ===============================
-// ✅ Envoyer message Telegram
-// ===============================
+// ======================================
+// ✅ OPENAI CLIENT
+// ======================================
+
+const client = new OpenAI({
+  apiKey: OPENAI_API_KEY,
+});
+
+// ======================================
+// ✅ SEND MESSAGE TELEGRAM
+// ======================================
+
 async function sendTelegram(chatId, text) {
   await axios.post(
     `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
@@ -23,9 +42,10 @@ async function sendTelegram(chatId, text) {
   );
 }
 
-// ===============================
-// ✅ Envoyer vente à Apps Script
-// ===============================
+// ======================================
+// ✅ ENVOYER VENTE AU GOOGLE SHEET
+// ======================================
+
 async function addSaleToSheet(nom, telephone, produit, quantite) {
   await axios.post(SCRIPT_URL, {
     nom_complet: nom,
@@ -35,16 +55,79 @@ async function addSaleToSheet(nom, telephone, produit, quantite) {
   });
 }
 
-// ===============================
-// ✅ Route test Render
-// ===============================
+// ======================================
+// ✅ GPT : CONVERSATION NORMALE
+// ======================================
+
+async function askGPT(userText) {
+  const response = await client.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      {
+        role: "system",
+        content:
+          "Tu es un assistant professionnel et chaleureux pour une boutique de lunettes. Réponds naturellement.",
+      },
+      {
+        role: "user",
+        content: userText,
+      },
+    ],
+  });
+
+  return response.choices[0].message.content.trim();
+}
+
+// ======================================
+// ✅ GPT : DÉTECTION DE VENTE EN PHRASE
+// ======================================
+
+async function detectSale(userText) {
+  const response = await client.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      {
+        role: "system",
+        content: `
+Tu dois détecter si le message contient une vente.
+
+Si c’est une vente, réponds uniquement avec ce JSON :
+
+{
+  "isSale": true,
+  "nom": "Marie",
+  "produit": "SOFT",
+  "quantite": 2
+}
+
+Si ce n’est pas une vente :
+
+{
+  "isSale": false
+}
+
+JSON uniquement. Rien d'autre.
+        `,
+      },
+      { role: "user", content: userText },
+    ],
+  });
+
+  return response.choices[0].message.content.trim();
+}
+
+// ======================================
+// ✅ ROUTE TEST RENDER
+// ======================================
+
 app.get("/", (_req, res) => {
-  res.send("✅ OK SERVER RUNNING");
+  res.send("✅ BOT RUNNING");
 });
 
-// ===============================
-// ✅ Webhook Telegram
-// ===============================
+// ======================================
+// ✅ WEBHOOK TELEGRAM
+// ======================================
+
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
 
@@ -53,34 +136,22 @@ app.post("/webhook", async (req, res) => {
     if (!message || !message.text) return;
 
     const chatId = message.chat.id;
-    const userText = message.text.trim();
+    const text = message.text.trim();
 
-    console.log("📩 Message reçu :", userText);
+    console.log("📩 Message reçu :", text);
 
-    // ===============================
-    // ✅ Réponse Bonjour
-    // ===============================
-    if (
-      userText.toLowerCase() === "bonjour" ||
-      userText.toLowerCase() === "salut"
-    ) {
-      await sendTelegram(
-        chatId,
-        "👋 Bonjour ! Je suis ton assistant.\n\n📌 Envoie une vente comme :\nNom, Téléphone, Produit, Quantité\n\nExemple : Mélissa, 56565655, BLUE, 2"
-      );
-      return;
-    }
+    // ======================================
+    // ✅ 1) Vente format virgule
+    // Exemple : Marie, 06000000, BLUE, 2
+    // ======================================
 
-    // ===============================
-    // ✅ Vente : 4 champs EXACTS
-    // ===============================
-    if (userText.includes(",")) {
-      const parts = userText.split(",");
+    if (text.includes(",")) {
+      const parts = text.split(",");
 
       if (parts.length !== 4) {
         await sendTelegram(
           chatId,
-          "❌ Format exact : Nom, Téléphone, Produit, Quantité\nExemple : Mélissa, 56565655, BLUE, 2"
+          "❌ Format vente : Nom, Téléphone, Produit, Quantité\nExemple : Marie, 06000000, BLUE, 2"
         );
         return;
       }
@@ -99,27 +170,57 @@ app.post("/webhook", async (req, res) => {
 
       await sendTelegram(
         chatId,
-        `✅ Vente enregistrée : ${nom} / ${produit} x${quantite}`
+        `✅ Vente enregistrée : ${produit} x${quantite} pour ${nom}`
       );
 
       return;
     }
 
-    // ===============================
-    // ✅ Sinon → aide
-    // ===============================
-    await sendTelegram(
-      chatId,
-      "💡 Je n’ai pas compris.\n\n📌 Envoie :\nNom, Téléphone, Produit, Quantité\n\nOu tape Bonjour."
-    );
+    // ======================================
+    // ✅ 2) Vente en phrase naturelle (GPT)
+    // Exemple : J’ai vendu 2 soft à Marie
+    // ======================================
+
+    const saleRaw = await detectSale(text);
+
+    let sale;
+    try {
+      sale = JSON.parse(saleRaw);
+    } catch (err) {
+      sale = { isSale: false };
+    }
+
+    if (sale.isSale) {
+      await addSaleToSheet(
+        sale.nom,
+        "00000000",
+        sale.produit,
+        sale.quantite
+      );
+
+      await sendTelegram(
+        chatId,
+        `✅ Vente enregistrée : ${sale.produit} x${sale.quantite} pour ${sale.nom}`
+      );
+
+      return;
+    }
+
+    // ======================================
+    // ✅ 3) Conversation normale GPT
+    // ======================================
+
+    const reply = await askGPT(text);
+    await sendTelegram(chatId, reply);
   } catch (err) {
     console.log("❌ Erreur webhook :", err.message);
   }
 });
 
-// ===============================
-// ✅ Lancer serveur
-// ===============================
+// ======================================
+// ✅ START SERVER
+// ======================================
+
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
