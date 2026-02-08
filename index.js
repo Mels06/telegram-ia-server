@@ -41,8 +41,7 @@ async function addSaleToSheet(
   telephone,
   produit,
   prix,
-  quantite,
-  montant
+  quantite
 ) {
   await axios.post(SCRIPT_URL, {
     nom_complet: nom_complet,
@@ -99,14 +98,33 @@ app.post("/webhook", async (req, res) => {
       const prix = parts[3].trim();
       const quantite = parts[4].trim();
 
+      // ✅ Calcul automatique du montant total
+const montant = Number(prix) * Number(quantite);
+
+// ✅ Enregistrer dans Google Sheet
+await addSaleToSheet(
+  nom_complet,
+  telephone,
+  produit,
+  prix,
+  quantite,
+  montant
+);
+
       // Enregistrer dans Google Sheet
       await addSaleToSheet(
         nom_complet,
         telephone,
         produit,
         prix,
-        quantite
+        quantite,
+        montant
       );
+
+      if (isNaN(prix) || isNaN(quantite)) {
+  await sendTelegram(chatId, "❌ Prix et quantité doivent être des nombres.");
+  return;
+}
 
       // Confirmation Telegram
       await sendTelegram(
