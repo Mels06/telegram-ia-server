@@ -1,3 +1,26 @@
+require("dotenv").config();
+const express = require("express");
+const axios = require("axios");
+
+const app = express();
+app.use(express.json());
+
+// ✅ Apps Script URL
+const SCRIPT_URL =
+  "https://script.google.com/macros/s/AKfycbwBJjWvypfxR_Z2ZOaOLQyOV0js2r3pLrUwEG_FFV4sYQGTnrRwFuIdb4djrWuiIuUwNA/exec";
+
+// ✅ Telegram sendMessage
+async function sendTelegram(chatId, text) {
+  return axios.post(
+    `https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/sendMessage`,
+    {
+      chat_id: chatId,
+      text: text,
+    }
+  );
+}
+
+// ✅ Webhook route
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
 
@@ -10,11 +33,10 @@ app.post("/webhook", async (req, res) => {
 
     console.log("📩 Message reçu :", userText);
 
-    // ✅ Si vente envoyée avec virgules
+    // ✅ Vente format
     if (userText.includes(",")) {
       const parts = userText.split(",");
 
-      // ✅ On attend exactement 5 infos
       if (parts.length < 5) {
         await sendTelegram(
           chatId,
@@ -23,17 +45,15 @@ app.post("/webhook", async (req, res) => {
         return;
       }
 
-      // ✅ Variables correctes
       const nom_complet = parts[0].trim();
       const telephone = parts[1].trim();
       const produit = parts[2].trim();
       const prix_unitaire = Number(parts[3].trim());
       const quantite = Number(parts[4].trim());
 
-      // ✅ Montant total automatique
       const montant_total = prix_unitaire * quantite;
 
-      // ✅ Envoi vers Google Sheet
+      // ✅ Send to Google Sheet
       await axios.post(SCRIPT_URL, {
         nom_complet,
         telephone,
@@ -43,21 +63,32 @@ app.post("/webhook", async (req, res) => {
         montant_total,
       });
 
-      // ✅ Confirmation Telegram
+      // ✅ Confirmation
       await sendTelegram(
         chatId,
-        `✅ Vente enregistrée : ${nom_complet} / ${produit} / ${prix_unitaire} FCFA x${quantite}`
+        `✅ Vente enregistrée : ${nom_complet} / ${produit} / ${montant_total} FCFA`
       );
 
       return;
     }
 
-    // ✅ Message normal si pas une vente
+    // ✅ Default help message
     await sendTelegram(
       chatId,
       "💡 Envoie une vente comme : Nom, Téléphone, Produit, Prix, Quantité"
     );
   } catch (err) {
-    console.log("❌ Erreur webhook :", err);
+    console.log("❌ Erreur webhook :", err.message);
   }
+});
+
+// ✅ Test route
+app.get("/", (req, res) => {
+  res.send("OK SERVER RUNNING");
+});
+
+// ✅ Start server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log("✅ Serveur démarré sur le port", PORT);
 });
