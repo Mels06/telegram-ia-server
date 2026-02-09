@@ -1,31 +1,17 @@
-// ===============================
-// ✅ TELEGRAM BOT + GOOGLE SHEET + GPT
-// ===============================
-
 require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
-const OpenAI = require("openai");
 
 const app = express();
 app.use(express.json());
 
 // ===============================
-// ✅ VARIABLES ENV
+// ✅ CONFIG
 // ===============================
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-// URL Apps Script
 const SCRIPT_URL =
   "https://script.google.com/macros/s/AKfycbwBJjWvypfxR_Z2ZOaOLQyOV0js2r3pLrUwEG_FFV4sYQGTnrRwFuIdb4djrWuiIuUwNA/exec";
-
-// ===============================
-// ✅ OPENAI CLIENT
-// ===============================
-const client = new OpenAI({
-  apiKey: OPENAI_API_KEY,
-});
 
 // ===============================
 // ✅ SEND TELEGRAM MESSAGE
@@ -59,43 +45,6 @@ async function addSaleToSheet(nom, telephone, produit, prix, quantite) {
 }
 
 // ===============================
-// ✅ GPT FUNCTION (INTELLIGENT BOT)
-// ===============================
-async function askGPT(userText) {
-  const response = await client.chat.completions.create({
-    model: "gpt-4o-mini",
-    messages: [
-      {
-        role: "system",
-        content: `
-Tu es un assistant intelligent de boutique.
-
-Tu dois comprendre les ventes écrites comme :
-- "Marie, 06060606, Soft, 15000, 2"
-- "J’ai vendu 2 soft à Marie"
-
-Si c’est une vente, répond uniquement sous ce format JSON :
-
-{
- "type": "sale",
- "nom": "...",
- "telephone": "...",
- "produit": "...",
- "prix": "...",
- "quantite": "..."
-}
-
-Si ce n’est pas une vente, répond normalement comme un assistant poli.
-        `,
-      },
-      { role: "user", content: userText },
-    ],
-  });
-
-  return response.choices[0].message.content;
-}
-
-// ===============================
 // ✅ TEST ROUTE
 // ===============================
 app.get("/", (req, res) => {
@@ -117,48 +66,50 @@ app.post("/webhook", async (req, res) => {
 
     console.log("📩 Message reçu :", userText);
 
-    // ✅ Basic hello
+    // ✅ Bonjour normal
     if (userText.toLowerCase() === "bonjour") {
-      await sendTelegram(chatId, "👋 Bonjour Mélissa ! Que puis-je faire ?");
+      await sendTelegram(chatId, "👋 Bonjour Mélissa ! Envoie une vente 😊");
       return;
     }
 
-    // ===============================
-    // ✅ GPT ANALYSIS
-    // ===============================
-    const gptReply = await askGPT(userText);
+    // ✅ Vente format CSV
+    if (userText.includes(",")) {
+      const parts = userText.split(",");
 
-    // Try JSON parse
-    let data;
-    try {
-      data = JSON.parse(gptReply);
-    } catch {
-      // Normal conversation
-      await sendTelegram(chatId, gptReply);
-      return;
-    }
+      if (parts.length < 5) {
+        await sendTelegram(
+          chatId,
+          "❌ Format attendu : Nom, Téléphone, Produit, Prix, Quantité"
+        );
+        return;
+      }
 
-    // ===============================
-    // ✅ IF SALE DETECTED
-    // ===============================
-    if (data.type === "sale") {
-      await addSaleToSheet(
-        data.nom,
-        data.telephone || "",
-        data.produit,
-        data.prix,
-        data.quantite
-      );
+      const nom = parts[0].trim();
+      const telephone = parts[1].trim();
+      const produit = parts[2].trim();
+      const prix = parts[3].trim();
+      const quantite = parts[4].trim();
+
+      if (isNaN(prix) || isNaN(quantite)) {
+        await sendTelegram(chatId, "❌ Prix et quantité doivent être des nombres.");
+        return;
+      }
+
+      await addSaleToSheet(nom, telephone, produit, prix, quantite);
 
       await sendTelegram(
         chatId,
-        `✅ Vente enregistrée : ${data.nom} a acheté ${data.quantite} ${data.produit}`
+        `✅ Vente enregistrée : ${nom} / ${produit} / ${prix} FCFA x${quantite}`
       );
+
       return;
     }
 
-    // fallback
-    await sendTelegram(chatId, "❌ Je n’ai pas compris.");
+    // Message aide
+    await sendTelegram(
+      chatId,
+      "💡 Envoie une vente comme : Nom, Téléphone, Produit, Prix, Quantité"
+    );
   } catch (err) {
     console.log("❌ Erreur webhook :", err.message);
   }
