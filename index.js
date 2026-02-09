@@ -22,7 +22,10 @@ const client = new OpenAI({
 async function sendTelegram(chatId, text) {
   await axios.post(
     https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage,
-    { chat_id: chatId, text }
+    {
+      chat_id: chatId,
+      text: text,
+    }
   );
 }
 
