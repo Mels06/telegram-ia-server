@@ -1,3 +1,65 @@
+require("dotenv").config();
+const express = require("express");
+const axios = require("axios");
+const OpenAI = require("openai");
+
+const app = express();
+app.use(express.json());
+
+// ENV
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
+const SCRIPT_URL =
+  "https://script.google.com/macros/s/AKfycbwBJjWvypfxR_Z2ZOaOLQyOV0js2r3pLrUwEG_FFV4sYQGTnrRwFuIdb4djrWuiIuUwNA/exec";
+
+// OpenAI Client
+const client = new OpenAI({
+  apiKey: OPENAI_API_KEY,
+});
+
+// Send Telegram
+async function sendTelegram(chatId, text) {
+  await axios.post(
+    https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage,
+    { chat_id: chatId, text }
+  );
+}
+
+// Add Sale to Sheet
+async function addSaleToSheet(nom, tel, produit, prix, quantite) {
+  await axios.post(SCRIPT_URL, {
+    nom_complet: nom,
+    telephone: tel,
+    produit: produit,
+    prix_unitaire: Number(prix),
+    quantite: Number(quantite),
+  });
+}
+
+// GPT Reply
+async function askGPT(userText) {
+  const response = await client.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      {
+        role: "system",
+        content:
+          "Tu es un assistant commercial. Tu réponds uniquement sur les ventes, stock, produits, chiffres.",
+      },
+      { role: "user", content: userText },
+    ],
+  });
+
+  return response.choices[0].message.content;
+}
+
+// Test route
+app.get("/", (req, res) => {
+  res.send("✅ Server running");
+});
+
+// Webhook Telegram
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
 
@@ -8,61 +70,22 @@ app.post("/webhook", async (req, res) => {
     const chatId = message.chat.id;
     const text = message.text.trim();
 
-    // ✅ Définir userText correctement
-    const userText = text.toLowerCase();
-
     console.log("📩 Message reçu :", text);
 
-    // ===============================
-    // ✅ COMMANDE STOCK DIRECTE
-    // ===============================
-    if (userText === "stock") {
-      const response = await axios.get(SCRIPT_URL + "?action=stock");
-      await sendTelegram(chatId, response.data);
+    // Stock command
+    if (text.toLowerCase() === "stock") {
+      await sendTelegram(chatId, "📦 Stock bientôt disponible.");
       return;
     }
 
-    // ===============================
-    // ✅ FILTRE ENTREPRISE
-    // ===============================
-    const businessKeywords = [
-      "vente",
-      "vendu",
-      "stock",
-      "produit",
-      "prix",
-      "quantité",
-      "client",
-      "chiffre",
-      "recette",
-      "bénéfice",
-      "jour",
-      "mois",
-    ];
-
-    const isBusiness = businessKeywords.some((word) =>
-      userText.includes(word)
-    );
-
-    // Si pas business → refuser gentiment
-    if (!isBusiness && !text.includes(",")) {
-      await sendTelegram(
-        chatId,
-        "📌 Je suis ton assistant de gestion d’entreprise.\n\nJe réponds uniquement aux questions liées aux ventes, stock, produits et chiffres.\n\n✅ Exemple :\n- stock\n- J’ai vendu 2 soft\n- Marie, 0606, Blue, 20000, 1"
-      );
-      return;
-    }
-
-    // ===============================
-    // ✅ VENTE FORMAT VIRGULES
-    // ===============================
+    // Sale format
     if (text.includes(",")) {
       const parts = text.split(",");
 
       if (parts.length < 5) {
         await sendTelegram(
           chatId,
-          "❌ Format attendu : Nom, Téléphone, Produit, Prix, Quantité"
+          "❌ Format : Nom, Téléphone, Produit, Prix, Quantité"
         );
         return;
       }
@@ -73,31 +96,26 @@ app.post("/webhook", async (req, res) => {
       const prix = parts[3].trim();
       const quantite = parts[4].trim();
 
-      if (isNaN(prix) || isNaN(quantite)) {
-        await sendTelegram(
-          chatId,
-          "❌ Prix et quantité doivent être des nombres."
-        );
-        return;
-      }
-
       await addSaleToSheet(nom, tel, produit, prix, quantite);
 
       await sendTelegram(
         chatId,
-        `✅ Vente enregistrée : ${nom} a acheté ${quantite} ${produit} (${prix} FCFA)`
+        ✅ Vente enregistrée : ${nom} → ${quantite} ${produit}
       );
-
       return;
     }
 
-    // ===============================
-    // ✅ GPT POUR DISCUSSION BUSINESS
-    // ===============================
-    const gptReply = await askGPT(text);
-    await sendTelegram(chatId, gptReply);
+    // GPT response
+    const reply = await askGPT(text);
+    await sendTelegram(chatId, reply);
 
   } catch (err) {
     console.log("❌ Erreur :", err.message);
   }
+});
+
+// Start server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log("🚀 Serveur lancé sur le port", PORT);
 });
