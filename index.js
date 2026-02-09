@@ -1,3 +1,7 @@
+// ===============================
+// ✅ BOT TELEGRAM + GOOGLE SHEET
+// ===============================
+
 require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
@@ -5,25 +9,21 @@ const axios = require("axios");
 const app = express();
 app.use(express.json());
 
-const OpenAI = require("openai");
-
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
 // ===============================
 // ✅ CONFIG
 // ===============================
+
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 
 const SCRIPT_URL =
   "https://script.google.com/macros/s/AKfycbwBJjWvypfxR_Z2ZOaOLQyOV0js2r3pLrUwEG_FFV4sYQGTnrRwFuIdb4djrWuiIuUwNA/exec";
 
 // ===============================
-// ✅ SEND TELEGRAM MESSAGE
+// ✅ TELEGRAM SEND
 // ===============================
+
 async function sendTelegram(chatId, text) {
-  return axios.post(
+  await axios.post(
     `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
     {
       chat_id: chatId,
@@ -32,38 +32,24 @@ async function sendTelegram(chatId, text) {
   );
 }
 
-async function askGPT(text) {
-  const response = await client.chat.completions.create({
-    model: "gpt-4o-mini",
-    messages: [
-      { role: "system", content: "Tu es un assistant commercial intelligent." },
-      { role: "user", content: text }
-    ]
-  });
-
-  return response.choices[0].message.content;
-}
-
 // ===============================
-// ✅ SAVE SALE TO GOOGLE SHEET
+// ✅ ENVOYER VENTE AU SHEET
 // ===============================
+
 async function addSaleToSheet(nom, telephone, produit, prix, quantite) {
-  const prix_unitaire = Number(prix);
-  const qte = Number(quantite);
-  const montant_total = prix_unitaire * qte;
-
-  return axios.post(SCRIPT_URL, {
+  await axios.post(SCRIPT_URL, {
     nom_complet: nom,
     telephone: telephone,
     produit: produit,
-    prix_unitaire: prix_unitaire,
-    quantite: qte,
+    prix_unitaire: Number(prix),
+    quantite: Number(quantite),
   });
 }
 
 // ===============================
-// ✅ TEST ROUTE
+// ✅ TEST SERVER
 // ===============================
+
 app.get("/", (req, res) => {
   res.send("✅ OK SERVER RUNNING");
 });
@@ -71,6 +57,7 @@ app.get("/", (req, res) => {
 // ===============================
 // ✅ WEBHOOK TELEGRAM
 // ===============================
+
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
 
@@ -83,20 +70,26 @@ app.post("/webhook", async (req, res) => {
 
     console.log("📩 Message reçu :", userText);
 
-    // ✅ Bonjour normal
-    if (userText.toLowerCase() === "bonjour") {
-      await sendTelegram(chatId, "👋 Bonjour Mélissa ! Envoie une vente 😊");
+    // ✅ Bonjour
+    if (
+      userText.toLowerCase() === "bonjour" ||
+      userText.toLowerCase() === "salut"
+    ) {
+      await sendTelegram(
+        chatId,
+        "👋 Bonjour !\n\n📌 Envoie une vente comme :\nNom, Téléphone, Produit, Prix, Quantité\n\nExemple : Marie, 0606, Soft, 15000, 2"
+      );
       return;
     }
 
-    // ✅ Vente format CSV
+    // ✅ Vente format virgules
     if (userText.includes(",")) {
       const parts = userText.split(",");
 
       if (parts.length < 5) {
         await sendTelegram(
           chatId,
-          "❌ Format attendu : Nom, Téléphone, Produit, Prix, Quantité"
+          "❌ Format incorrect.\nExemple : Marie, 0606, Soft, 15000, 2"
         );
         return;
       }
@@ -107,38 +100,38 @@ app.post("/webhook", async (req, res) => {
       const prix = parts[3].trim();
       const quantite = parts[4].trim();
 
+      // Vérification chiffres
       if (isNaN(prix) || isNaN(quantite)) {
-        await sendTelegram(chatId, "❌ Prix et quantité doivent être des nombres.");
+        await sendTelegram(chatId, "❌ Prix et Quantité doivent être des nombres.");
         return;
       }
 
+      // ✅ Envoi vers Sheet
       await addSaleToSheet(nom, telephone, produit, prix, quantite);
 
+      // ✅ Confirmation
       await sendTelegram(
         chatId,
-        `✅ Vente enregistrée : ${nom} / ${produit} / ${prix} FCFA x${quantite}`
+        `✅ Vente enregistrée :\n${nom} a acheté ${quantite} ${produit}\nPrix : ${prix} FCFA`
       );
 
       return;
     }
 
-    // Message aide
+    // Message par défaut
     await sendTelegram(
       chatId,
-      "💡 Envoie une vente comme : Nom, Téléphone, Produit, Prix, Quantité"
+      "🤖 Je n’ai pas compris.\n📌 Envoie : Nom, Téléphone, Produit, Prix, Quantité"
     );
   } catch (err) {
     console.log("❌ Erreur webhook :", err.message);
   }
 });
 
-// Si ce n’est pas une vente → GPT répond
-const reply = await askGPT(userText);
-await sendTelegram(chatId, reply);
-
 // ===============================
 // ✅ START SERVER
 // ===============================
+
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
