@@ -102,11 +102,9 @@ app.post("/webhook", async (req, res) => {
       await addSaleToSheet(nom, tel, produit, prix, quantite);
 
       await sendTelegram(
-        chatId,
-        ✅ Vente enregistrée : ${nom} → ${quantite} ${produit}
-      );
-      return;
-    }
+  chatId,
+  `✅ Vente enregistrée : ${nom} → ${quantite} ${produit}`
+);
 
     // GPT response
     const reply = await askGPT(text);
