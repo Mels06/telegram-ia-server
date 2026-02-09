@@ -1,41 +1,51 @@
+// ===============================
+// ✅ TELEGRAM BOT + GPT + GOOGLE SHEET
+// ===============================
+
 require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
+const OpenAI = require("openai");
 
 const app = express();
 app.use(express.json());
 
 // ===============================
-// CONFIG
+// ✅ ENV VARIABLES
 // ===============================
-
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 const SCRIPT_URL =
   "https://script.google.com/macros/s/AKfycbwBJjWvypfxR_Z2ZOaOLQyOV0js2r3pLrUwEG_FFV4sYQGTnrRwFuIdb4djrWuiIuUwNA/exec";
 
 // ===============================
-// TELEGRAM MESSAGE
+// ✅ OpenAI Client
 // ===============================
+const client = new OpenAI({
+  apiKey: OPENAI_API_KEY,
+});
 
+// ===============================
+// ✅ Send Telegram Message
+// ===============================
 async function sendTelegram(chatId, text) {
-  return axios.post(
+  await axios.post(
     `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
     {
       chat_id: chatId,
-      text: text,
+      text,
     }
   );
 }
 
 // ===============================
-// ENVOI GOOGLE SHEET (SANS MONTANT)
+// ✅ Add Sale to Google Sheet
 // ===============================
-
-async function addSaleToSheet(nom, telephone, produit, prix, quantite) {
-  return axios.post(SCRIPT_URL, {
+async function addSaleToSheet(nom, tel, produit, prix, quantite) {
+  await axios.post(SCRIPT_URL, {
     nom_complet: nom,
-    telephone: telephone,
+    telephone: tel,
     produit: produit,
     prix_unitaire: Number(prix),
     quantite: Number(quantite),
@@ -43,17 +53,34 @@ async function addSaleToSheet(nom, telephone, produit, prix, quantite) {
 }
 
 // ===============================
-// TEST SERVER
+// ✅ GPT Response Function
 // ===============================
+async function askGPT(userText) {
+  const response = await client.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      {
+        role: "system",
+        content:
+          "Tu es un assistant commercial intelligent. Tu aides à gérer ventes, stock, réponses clients.",
+      },
+      { role: "user", content: userText },
+    ],
+  });
 
+  return response.choices[0].message.content;
+}
+
+// ===============================
+// ✅ Test Route
+// ===============================
 app.get("/", (req, res) => {
-  res.send("OK SERVER RUNNING");
+  res.send("✅ Server running");
 });
 
 // ===============================
-// WEBHOOK TELEGRAM
+// ✅ Telegram Webhook
 // ===============================
-
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
 
@@ -64,65 +91,55 @@ app.post("/webhook", async (req, res) => {
     const chatId = message.chat.id;
     const text = message.text.trim();
 
-    console.log("Message reçu :", text);
+    console.log("📩 Message reçu :", text);
 
-    // Bonjour simple
-    if (text.toLowerCase() === "bonjour") {
-      await sendTelegram(
-        chatId,
-        "👋 Bonjour Mélissa !\n\n📌 Envoie une vente comme :\nNom, Téléphone, Produit, Prix, Quantité\n\nExemple : Marie, 0606, Soft, 15000, 2"
-      );
-      return;
-    }
-
-    // Vente avec virgules
+    // ===============================
+    // ✅ SALES FORMAT: Nom, Tel, Produit, Prix, Quantité
+    // ===============================
     if (text.includes(",")) {
       const parts = text.split(",");
 
-      if (parts.length !== 5) {
+      if (parts.length < 5) {
         await sendTelegram(
           chatId,
-          "❌ Format exact : Nom, Téléphone, Produit, Prix, Quantité"
+          "❌ Format attendu : Nom, Téléphone, Produit, Prix, Quantité"
         );
         return;
       }
 
       const nom = parts[0].trim();
-      const telephone = parts[1].trim();
+      const tel = parts[1].trim();
       const produit = parts[2].trim();
       const prix = parts[3].trim();
       const quantite = parts[4].trim();
 
       if (isNaN(prix) || isNaN(quantite)) {
-        await sendTelegram(chatId, "❌ Prix et Quantité doivent être des nombres.");
+        await sendTelegram(chatId, "❌ Prix et quantité doivent être des nombres.");
         return;
       }
 
-      // ENVOI SHEET
-      await addSaleToSheet(nom, telephone, produit, prix, quantite);
+      await addSaleToSheet(nom, tel, produit, prix, quantite);
 
-      // CONFIRMATION
       await sendTelegram(
         chatId,
-        `✅ Vente enregistrée :\n${nom} / ${produit} (${quantite})\nPrix : ${prix} FCFA`
+        `✅ Vente enregistrée : ${nom} a acheté ${quantite} ${produit} (${prix} FCFA)`
       );
 
       return;
     }
 
-    // Sinon aide
-    await sendTelegram(
-      chatId,
-      "📌 Je n’ai pas compris.\nEnvoie : Nom, Téléphone, Produit, Prix, Quantité"
-    );
+    // ===============================
+    // ✅ Otherwise GPT handles conversation
+    // ===============================
+    const gptReply = await askGPT(text);
+    await sendTelegram(chatId, gptReply);
   } catch (err) {
-    console.log("ERREUR :", err.message);
+    console.log("❌ Erreur :", err.message);
   }
 });
 
 // ===============================
-// START
+// ✅ Start Server
 // ===============================
-
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Serveur lancé sur", PORT));
+app.listen(PORT, () => console.log("🚀 Serveur lancé sur", PORT));
