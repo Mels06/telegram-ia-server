@@ -5,6 +5,12 @@ const axios = require("axios");
 const app = express();
 app.use(express.json());
 
+const OpenAI = require("openai");
+
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
 // ===============================
 // ✅ CONFIG
 // ===============================
@@ -26,6 +32,18 @@ async function sendTelegram(chatId, text) {
   );
 }
 
+async function askGPT(text) {
+  const response = await client.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      { role: "system", content: "Tu es un assistant commercial intelligent." },
+      { role: "user", content: text }
+    ]
+  });
+
+  return response.choices[0].message.content;
+}
+
 // ===============================
 // ✅ SAVE SALE TO GOOGLE SHEET
 // ===============================
@@ -40,7 +58,6 @@ async function addSaleToSheet(nom, telephone, produit, prix, quantite) {
     produit: produit,
     prix_unitaire: prix_unitaire,
     quantite: qte,
-    montant_total: montant_total,
   });
 }
 
@@ -114,6 +131,10 @@ app.post("/webhook", async (req, res) => {
     console.log("❌ Erreur webhook :", err.message);
   }
 });
+
+// Si ce n’est pas une vente → GPT répond
+const reply = await askGPT(userText);
+await sendTelegram(chatId, reply);
 
 // ===============================
 // ✅ START SERVER
