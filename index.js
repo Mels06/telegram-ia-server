@@ -13,6 +13,26 @@ const SCRIPT_URL     = "https://script.google.com/macros/s/AKfycbyuNzvkLMEfVGbvO
 const client = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 // ==============================
+// MÉMOIRE PAR UTILISATEUR (en mémoire RAM)
+// Stocke les 10 derniers messages par chatId
+// ==============================
+const userMemory = {};
+
+function getHistory(chatId) {
+  if (!userMemory[chatId]) userMemory[chatId] = [];
+  return userMemory[chatId];
+}
+
+function addToHistory(chatId, role, content) {
+  if (!userMemory[chatId]) userMemory[chatId] = [];
+  userMemory[chatId].push({ role, content });
+  // Garder seulement les 10 derniers échanges
+  if (userMemory[chatId].length > 20) {
+    userMemory[chatId] = userMemory[chatId].slice(-20);
+  }
+}
+
+// ==============================
 // TELEGRAM
 // ==============================
 async function sendTelegram(chatId, text) {
@@ -28,6 +48,14 @@ async function sendTelegram(chatId, text) {
 }
 
 // ==============================
+// GOOGLE SHEET — Récupérer les données
+// ==============================
+async function fetchFromSheet(action) {
+  const response = await fetch(`${SCRIPT_URL}?action=${action}`);
+  return response.json();
+}
+
+// ==============================
 // GOOGLE SHEET — Ajouter une vente
 // ==============================
 async function addSaleToSheet(nom, tel, produit, prix, quantite) {
@@ -37,7 +65,7 @@ async function addSaleToSheet(nom, tel, produit, prix, quantite) {
 
   const payload = JSON.stringify({
     nom_complet:   nom,
-    telephone:     String(tel).trim(),
+    telephone:     String(tel || "").trim(),
     produit:       String(produit).trim(),
     prix_unitaire: prixNum,
     quantite:      quantiteNum,
@@ -54,12 +82,10 @@ async function addSaleToSheet(nom, tel, produit, prix, quantite) {
     redirect: "follow",
   });
 
-  const text = await response.text();
-  console.log("📥 REPONSE BRUTE:", text);
-
+  const text   = await response.text();
   const result = JSON.parse(text);
+  console.log("📥 REPONSE:", JSON.stringify(result));
 
-  // ✅ Fix : Google renvoie "success" ou "ok", les deux sont valides
   if (result.status !== "ok" && result.status !== "success") {
     throw new Error(result.message || "Erreur inconnue");
   }
@@ -68,41 +94,134 @@ async function addSaleToSheet(nom, tel, produit, prix, quantite) {
 }
 
 // ==============================
-// GOOGLE SHEET — Ventes du jour
+// GPT INTELLIGENT avec accès aux données réelles
 // ==============================
-async function getTodaySales() {
-  const response = await fetch(`${SCRIPT_URL}?action=today_sales`);
-  return response.json();
-}
-
-// ==============================
-// GOOGLE SHEET — Stock
-// ==============================
-async function getStock() {
-  const response = await fetch(`${SCRIPT_URL}?action=stock`);
-  return response.json();
-}
-
-// ==============================
-// GPT
-// ==============================
-async function askGPT(userText, context = "") {
+async function askGPT(chatId, userText) {
   try {
-    const systemPrompt =
-      `Tu es un assistant commercial d'une entreprise. Tu réponds UNIQUEMENT sur : ventes, stocks, produits, commandes, chiffres, gestion commerciale. Sois concis et professionnel.` +
-      (context ? `\n\nContexte du jour : ${context}` : "");
+    // 1. Récupérer les données réelles du Google Sheet
+    let dataContext = "";
+    try {
+      const [todaySales, allStats, stock] = await Promise.all([
+        fetchFromSheet("today_sales"),
+        fetchFromSheet("all_stats"),
+        fetchFromSheet("stock"),
+      ]);
+
+      // Ventes du jour
+      if (todaySales.status === "ok") {
+        dataContext += `\n=== VENTES DU JOUR (${todaySales.date}) ===\n`;
+        dataContext += `Nombre de ventes : ${todaySales.total_ventes}\n`;
+        dataContext += `CA du jour : ${todaySales.total_montant}\n`;
+        if (Object.keys(todaySales.par_produit || {}).length > 0) {
+          dataContext += `Par produit aujourd'hui :\n`;
+          for (const [p, v] of Object.entries(todaySales.par_produit)) {
+            dataContext += `  - ${p} : ${v.quantite} unités vendues, ${v.montant} de CA\n`;
+          }
+        }
+        if (todaySales.detail && todaySales.detail.length > 0) {
+          dataContext += `Détail des ventes :\n`;
+          todaySales.detail.forEach(v => {
+            dataContext += `  - ${v.nom || "Inconnu"} : ${v.quantite}x ${v.produit} à ${v.prix} = ${v.montant}\n`;
+          });
+        }
+      }
+
+      // Stats globales
+      if (allStats.status === "ok") {
+        dataContext += `\n=== STATS GLOBALES (tous les temps) ===\n`;
+        dataContext += `Total ventes : ${allStats.total_ventes}\n`;
+        dataContext += `CA total : ${allStats.total_montant}\n`;
+        if (Object.keys(allStats.par_produit || {}).length > 0) {
+          dataContext += `Par produit (total) :\n`;
+          for (const [p, v] of Object.entries(allStats.par_produit)) {
+            dataContext += `  - ${p} : ${v.quantite} unités, ${v.montant} de CA\n`;
+          }
+        }
+        if (Object.keys(allStats.par_jour || {}).length > 0) {
+          dataContext += `Par jour :\n`;
+          for (const [jour, v] of Object.entries(allStats.par_jour)) {
+            dataContext += `  - ${jour} : ${v.ventes} vente(s), ${v.montant} de CA\n`;
+          }
+        }
+      }
+
+      // Stock
+      if (stock.status === "ok") {
+        dataContext += `\n=== STOCK ACTUEL ===\n`;
+        stock.stock.forEach(item => {
+          dataContext += `  - ${item.produit} : ${item.quantite_restante} unités restantes\n`;
+        });
+      }
+    } catch (e) {
+      console.error("⚠️ Erreur récupération données:", e.message);
+      dataContext = "\n(Données du sheet temporairement indisponibles)\n";
+    }
+
+    // 2. Construire les messages avec mémoire
+    const history = getHistory(chatId);
+
+    const systemPrompt = `Tu es un assistant commercial intelligent d'une entreprise.
+Tu as accès en temps réel aux données du Google Sheet de l'entreprise.
+Tu réponds UNIQUEMENT sur les sujets commerciaux : ventes, stocks, produits, commandes, chiffres, clients.
+Si quelqu'un parle d'une vente en langage naturel (ex: "j'ai vendu 2 sacs à Marie pour 5000"), 
+réponds en confirmant les infos et demande ce qu'il manque (téléphone si absent).
+Tu n'inventes JAMAIS de chiffres. Tu utilises UNIQUEMENT les données ci-dessous.
+Si tu ne sais pas, dis-le clairement.
+
+${dataContext}
+
+Date et heure actuelles : ${new Date().toLocaleString("fr-FR")}`;
+
+    const messages = [
+      { role: "system", content: systemPrompt },
+      ...history,
+      { role: "user", content: userText }
+    ];
 
     const response = await client.chat.completions.create({
       model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user",   content: userText },
-      ],
+      messages,
     });
-    return response.choices[0].message.content;
+
+    const reply = response.choices[0].message.content;
+
+    // 3. Sauvegarder dans la mémoire
+    addToHistory(chatId, "user",      userText);
+    addToHistory(chatId, "assistant", reply);
+
+    return reply;
+
   } catch (err) {
     console.error("❌ Erreur OpenAI :", err.message);
-    return "⚠️ Erreur GPT. Réessaie.";
+    return "⚠️ Erreur GPT. Réessaie dans un instant.";
+  }
+}
+
+// ==============================
+// DÉTECTER UNE VENTE EN LANGAGE NATUREL via GPT
+// ==============================
+async function extractSaleFromText(text) {
+  try {
+    const response = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: `Tu es un extracteur de données de vente. 
+Analyse le message et si c'est une vente, retourne UNIQUEMENT un JSON avec :
+{"is_sale": true, "nom": "...", "telephone": "...", "produit": "...", "prix_unitaire": 0, "quantite": 0}
+Si le téléphone est absent, mets "telephone": "".
+Si ce n'est PAS une vente, retourne : {"is_sale": false}
+Réponds UNIQUEMENT avec le JSON, rien d'autre.`
+        },
+        { role: "user", content: text }
+      ],
+    });
+
+    const raw = response.choices[0].message.content.trim();
+    return JSON.parse(raw);
+  } catch (e) {
+    return { is_sale: false };
   }
 }
 
@@ -125,44 +244,30 @@ app.post("/webhook", async (req, res) => {
 
     // /start
     if (text === "/start") {
+      userMemory[chatId] = []; // reset mémoire
       await sendTelegram(chatId,
         `👋 *Bienvenue sur le bot commercial !*\n\n` +
-        `📝 *Enregistrer une vente :*\n\`Nom, Téléphone, Produit, Prix, Quantité\`\n` +
+        `📝 *Enregistrer une vente (format rapide) :*\n` +
+        `\`Nom, Téléphone, Produit, Prix, Quantité\`\n` +
         `Exemple : \`Mélissa, 45454544, soft, 15000, 1\`\n\n` +
+        `💬 *Ou en langage naturel :*\n` +
+        `"J'ai vendu 2 soft à Marie pour 15000"\n\n` +
         `📊 \`commandes\` → ventes du jour\n` +
-        `📦 \`stock\` → état du stock\n\n` +
-        `Pose aussi des questions commerciales librement !`
+        `📦 \`stock\` → état du stock\n` +
+        `📈 \`stats\` → statistiques globales\n\n` +
+        `Tu peux aussi me poser n'importe quelle question commerciale !`
       );
       return;
     }
 
-    // commandes du jour
-    if (text.toLowerCase() === "commandes") {
-      try {
-        const data = await getTodaySales();
-        if (data.total_ventes === 0) {
-          await sendTelegram(chatId, "📊 Aucune vente enregistrée aujourd'hui.");
-          return;
-        }
-        let msg = `📊 *Ventes du ${data.date}*\n\n🔢 Nombre : *${data.total_ventes}*\n💰 CA : *${Number(data.total_montant).toLocaleString("fr-FR")}*\n\n📋 *Détail :*\n`;
-        data.detail.forEach((v, i) => {
-          msg += `${i + 1}. ${v.nom} — ${v.produit} — ${Number(v.montant).toLocaleString("fr-FR")}\n`;
-        });
-        await sendTelegram(chatId, msg);
-      } catch (e) {
-        await sendTelegram(chatId, "⚠️ Impossible de lire les ventes du jour.");
-      }
-      return;
-    }
-
-    // stock
+    // Commande stock
     if (text.toLowerCase() === "stock") {
       try {
-        const data = await getStock();
+        const data = await fetchFromSheet("stock");
         let msg = `📦 *État du stock :*\n\n`;
         data.stock.forEach((item) => {
-          const emoji = item.quantite_restante < 10 ? "🔴" : "🟢";
-          msg += `${emoji} ${item.produit} : *${item.quantite_restante}* unités\n`;
+          const emoji = item.quantite_restante < 10 ? "🔴" : item.quantite_restante < 20 ? "🟡" : "🟢";
+          msg += `${emoji} *${item.produit}* : ${item.quantite_restante} unités\n`;
         });
         await sendTelegram(chatId, msg);
       } catch (e) {
@@ -171,58 +276,111 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    // Enregistrement vente
-    if (text.includes(",")) {
-      const parts = text.split(",").map((p) => p.trim());
-
-      if (parts.length < 5) {
-        await sendTelegram(chatId,
-          `❌ *Format incorrect.*\n\nFormat : \`Nom, Téléphone, Produit, Prix, Quantité\`\nExemple : \`Mélissa, 45454544, soft, 15000, 1\``
-        );
-        return;
-      }
-
-      const [nom, tel, produit, prix, quantite] = parts;
-
-      if (!nom || !tel || !produit) {
-        await sendTelegram(chatId, "❌ Nom, téléphone et produit ne peuvent pas être vides.");
-        return;
-      }
-
-      const prixTest     = parseFloat(String(prix).replace(",", "."));
-      const quantiteTest = parseInt(String(quantite), 10);
-
-      if (isNaN(prixTest) || isNaN(quantiteTest)) {
-        await sendTelegram(chatId, `❌ Prix ou quantité invalide.\nExemple : \`Mélissa, 45454544, soft, 15000, 1\``);
-        return;
-      }
-
+    // Commande commandes du jour
+    if (text.toLowerCase() === "commandes") {
       try {
-        const { prixNum, quantiteNum, montantTotal } = await addSaleToSheet(nom, tel, produit, prix, quantite);
-        await sendTelegram(chatId,
-          `✅ *Vente enregistrée !*\n\n` +
-          `👤 ${nom}\n📞 ${tel}\n📦 ${produit}\n` +
-          `💲 Prix unitaire : ${prixNum.toLocaleString("fr-FR")}\n` +
-          `🔢 Quantité : ${quantiteNum}\n` +
-          `💰 Total : *${montantTotal.toLocaleString("fr-FR")}*`
-        );
+        const data = await fetchFromSheet("today_sales");
+        if (data.total_ventes === 0) {
+          await sendTelegram(chatId, "📊 Aucune vente enregistrée aujourd'hui.");
+          return;
+        }
+        let msg = `📊 *Ventes du ${data.date}*\n\n`;
+        msg += `🔢 Nombre de ventes : *${data.total_ventes}*\n`;
+        msg += `💰 CA du jour : *${Number(data.total_montant).toLocaleString("fr-FR")}*\n\n`;
+        if (Object.keys(data.par_produit || {}).length > 0) {
+          msg += `📦 *Par produit :*\n`;
+          for (const [p, v] of Object.entries(data.par_produit)) {
+            msg += `  • ${p} : ${v.quantite} unités — ${Number(v.montant).toLocaleString("fr-FR")}\n`;
+          }
+          msg += "\n";
+        }
+        msg += `📋 *Détail :*\n`;
+        data.detail.forEach((v, i) => {
+          msg += `${i + 1}. ${v.nom || "?"} — ${v.quantite}x ${v.produit} — ${Number(v.montant).toLocaleString("fr-FR")}\n`;
+        });
+        await sendTelegram(chatId, msg);
       } catch (e) {
-        console.error("❌ Erreur vente :", e.message);
-        await sendTelegram(chatId, "⚠️ Erreur lors de l'enregistrement. Vérifie tes données.");
+        await sendTelegram(chatId, "⚠️ Impossible de lire les ventes.");
       }
       return;
     }
 
-    // GPT avec contexte ventes du jour
-    let context = "";
-    try {
-      const sales = await getTodaySales();
-      if (sales.status === "ok" && sales.total_ventes > 0) {
-        context = `Ventes du jour (${sales.date}) : ${sales.total_ventes} vente(s), CA total : ${sales.total_montant}.`;
+    // Commande stats globales
+    if (text.toLowerCase() === "stats") {
+      try {
+        const data = await fetchFromSheet("all_stats");
+        let msg = `📈 *Statistiques globales*\n\n`;
+        msg += `🔢 Total ventes : *${data.total_ventes}*\n`;
+        msg += `💰 CA total : *${Number(data.total_montant).toLocaleString("fr-FR")}*\n\n`;
+        if (Object.keys(data.par_produit || {}).length > 0) {
+          msg += `📦 *Par produit :*\n`;
+          for (const [p, v] of Object.entries(data.par_produit)) {
+            msg += `  • ${p} : ${v.quantite} unités — ${Number(v.montant).toLocaleString("fr-FR")}\n`;
+          }
+        }
+        await sendTelegram(chatId, msg);
+      } catch (e) {
+        await sendTelegram(chatId, "⚠️ Impossible de lire les stats.");
       }
-    } catch (_) {}
+      return;
+    }
 
-    const reply = await askGPT(text, context);
+    // Format CSV classique : Nom, Tel, Produit, Prix, Quantité
+    if (text.includes(",")) {
+      const parts = text.split(",").map((p) => p.trim());
+      if (parts.length >= 5) {
+        const [nom, tel, produit, prix, quantite] = parts;
+        const prixTest     = parseFloat(String(prix).replace(",", "."));
+        const quantiteTest = parseInt(String(quantite), 10);
+
+        if (nom && produit && !isNaN(prixTest) && !isNaN(quantiteTest)) {
+          try {
+            const { prixNum, quantiteNum, montantTotal } = await addSaleToSheet(nom, tel, produit, prix, quantite);
+            const confirmMsg = `✅ *Vente enregistrée !*\n\n👤 ${nom}\n📞 ${tel}\n📦 ${produit}\n💲 Prix : ${prixNum.toLocaleString("fr-FR")}\n🔢 Qté : ${quantiteNum}\n💰 Total : *${montantTotal.toLocaleString("fr-FR")}*`;
+            await sendTelegram(chatId, confirmMsg);
+            addToHistory(chatId, "user",      text);
+            addToHistory(chatId, "assistant", confirmMsg);
+          } catch (e) {
+            await sendTelegram(chatId, "⚠️ Erreur lors de l'enregistrement.");
+          }
+          return;
+        }
+      }
+    }
+
+    // Détection vente en langage naturel
+    const extracted = await extractSaleFromText(text);
+    if (extracted.is_sale && extracted.produit && extracted.prix_unitaire && extracted.quantite) {
+      console.log("🧠 Vente détectée en langage naturel:", JSON.stringify(extracted));
+      try {
+        const { prixNum, quantiteNum, montantTotal } = await addSaleToSheet(
+          extracted.nom || "Inconnu",
+          extracted.telephone || "",
+          extracted.produit,
+          extracted.prix_unitaire,
+          extracted.quantite
+        );
+        let confirmMsg = `✅ *Vente enregistrée automatiquement !*\n\n`;
+        confirmMsg += `👤 ${extracted.nom || "Inconnu"}\n`;
+        if (extracted.telephone) confirmMsg += `📞 ${extracted.telephone}\n`;
+        confirmMsg += `📦 ${extracted.produit}\n`;
+        confirmMsg += `💲 Prix : ${prixNum.toLocaleString("fr-FR")}\n`;
+        confirmMsg += `🔢 Qté : ${quantiteNum}\n`;
+        confirmMsg += `💰 Total : *${montantTotal.toLocaleString("fr-FR")}*`;
+        if (!extracted.telephone) {
+          confirmMsg += `\n\n⚠️ _Téléphone manquant. Tu peux l'ajouter manuellement._`;
+        }
+        await sendTelegram(chatId, confirmMsg);
+        addToHistory(chatId, "user",      text);
+        addToHistory(chatId, "assistant", confirmMsg);
+      } catch (e) {
+        await sendTelegram(chatId, "⚠️ Erreur lors de l'enregistrement.");
+      }
+      return;
+    }
+
+    // Sinon → GPT avec accès aux vraies données
+    const reply = await askGPT(chatId, text);
     await sendTelegram(chatId, reply);
 
   } catch (err) {
