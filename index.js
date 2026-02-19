@@ -43,7 +43,11 @@ async function callSheet(action, extraData = {}) {
 
   const text   = await response.text();
   console.log(`📥 callSheet(${action}) réponse:`, text);
-  return JSON.parse(text);
+
+  const result = JSON.parse(text);
+  // ✅ Fix : normalise "success" en "ok"
+  if (result.status === "success") result.status = "ok";
+  return result;
 }
 
 // ==============================
@@ -66,7 +70,6 @@ async function sendTelegram(chatId, text) {
 // ==============================
 async function askGPT(chatId, userText) {
   try {
-    // Charger toutes les données réelles en parallèle
     let dataContext = "";
     try {
       const [todaySales, allStats, stock] = await Promise.all([
@@ -104,6 +107,9 @@ async function askGPT(chatId, userText) {
           dataContext += `  - ${s.produit} : ${s.quantite_restante} unités\n`;
         });
       }
+
+      console.log("📊 Contexte données GPT:\n", dataContext);
+
     } catch (e) {
       console.error("⚠️ Erreur chargement données:", e.message);
       dataContext = "(Erreur de chargement des données)";
@@ -115,7 +121,7 @@ Tu as accès aux données RÉELLES ci-dessous. Tu n'inventes RIEN. Si une info n
 Date actuelle : ${new Date().toLocaleString("fr-FR")}
 
 DONNÉES RÉELLES DU GOOGLE SHEET :
-${dataContext}`;
+${dataContext || "Aucune donnée disponible pour le moment."}`;
 
     const messages = [
       { role: "system", content: systemPrompt },
@@ -247,7 +253,7 @@ app.post("/webhook", async (req, res) => {
             nom_complet: nom, telephone: tel, produit,
             prix_unitaire: pN, quantite: qN
           });
-          if (result.status === "ok" || result.status === "success") {
+          if (result.status === "ok") {
             await sendTelegram(chatId,
               `✅ *Vente enregistrée !*\n\n👤 ${nom}\n📞 ${tel}\n📦 ${produit}\n💲 ${pN.toLocaleString("fr-FR")}\n🔢 ${qN}\n💰 *${(pN * qN).toLocaleString("fr-FR")}*`
             );
@@ -263,13 +269,13 @@ app.post("/webhook", async (req, res) => {
     const extracted = await extractSale(text);
     if (extracted.is_sale && extracted.produit && extracted.prix_unitaire && extracted.quantite) {
       const result = await callSheet("add_sale", {
-        nom_complet: extracted.nom || "Inconnu",
-        telephone:   extracted.telephone || "",
-        produit:     extracted.produit,
+        nom_complet:   extracted.nom || "Inconnu",
+        telephone:     extracted.telephone || "",
+        produit:       extracted.produit,
         prix_unitaire: extracted.prix_unitaire,
-        quantite:    extracted.quantite,
+        quantite:      extracted.quantite,
       });
-      if (result.status === "ok" || result.status === "success") {
+      if (result.status === "ok") {
         let msg = `✅ *Vente enregistrée automatiquement !*\n\n👤 ${extracted.nom || "Inconnu"}\n📦 ${extracted.produit}\n💲 ${extracted.prix_unitaire}\n🔢 ${extracted.quantite}\n💰 *${(extracted.prix_unitaire * extracted.quantite).toLocaleString("fr-FR")}*`;
         if (!extracted.telephone) msg += `\n\n⚠️ _Téléphone manquant._`;
         await sendTelegram(chatId, msg);
