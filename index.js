@@ -8,9 +8,7 @@ app.use(express.json());
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-
-// ✅ NOUVELLE URL mise à jour
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyuNzvkLMEfVGbvO22dAOqPMrBVjUn7RC_VnlMYvhd1cN0LPEzWXJiIfrVFlSKRGJ6WcA/exec";
+const SCRIPT_URL     = "https://script.google.com/macros/s/AKfycbyuNzvkLMEfVGbvO22dAOqPMrBVjUn7RC_VnlMYvhd1cN0LPEzWXJiIfrVFlSKRGJ6WcA/exec";
 
 const client = new OpenAI({ apiKey: OPENAI_API_KEY });
 
@@ -35,11 +33,6 @@ async function sendTelegram(chatId, text) {
 async function addSaleToSheet(nom, tel, produit, prix, quantite) {
   const prixNum     = parseFloat(String(prix).replace(",", "."));
   const quantiteNum = parseInt(String(quantite), 10);
-
-  if (isNaN(prixNum) || isNaN(quantiteNum)) {
-    throw new Error("Prix ou quantité invalide");
-  }
-
   const montantTotal = prixNum * quantiteNum;
 
   const payload = JSON.stringify({
@@ -52,9 +45,8 @@ async function addSaleToSheet(nom, tel, produit, prix, quantite) {
     statut:        "validé"
   });
 
-  console.log("📤 Payload envoyé :", payload);
+  console.log("📤 PAYLOAD:", payload);
 
-  // Utilise fetch natif (Node 18+) pour bien suivre la redirection Google
   const response = await fetch(SCRIPT_URL, {
     method:   "POST",
     headers:  { "Content-Type": "application/json" },
@@ -62,11 +54,14 @@ async function addSaleToSheet(nom, tel, produit, prix, quantite) {
     redirect: "follow",
   });
 
-  const result = await response.json();
-  console.log("✅ Réponse Google Sheet :", JSON.stringify(result));
+  const text = await response.text();
+  console.log("📥 REPONSE BRUTE:", text);
 
-  if (result.status !== "ok") {
-    throw new Error("Google Sheet a retourné une erreur : " + result.message);
+  const result = JSON.parse(text);
+
+  // ✅ Fix : Google renvoie "success" ou "ok", les deux sont valides
+  if (result.status !== "ok" && result.status !== "success") {
+    throw new Error(result.message || "Erreur inconnue");
   }
 
   return { prixNum, quantiteNum, montantTotal };
