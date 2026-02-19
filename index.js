@@ -43,23 +43,30 @@ async function addSaleToSheet(nom, tel, produit, prix, quantite) {
 
   const montantTotal = prixNum * quantiteNum;
 
-  const payload = {
+  const payload = JSON.stringify({
     nom_complet:   nom,
     telephone:     String(tel).trim(),
-    produit:       produit,
+    produit:       String(produit).trim(),
     prix_unitaire: prixNum,
     quantite:      quantiteNum,
     montant_total: montantTotal,
-    statut:        "validé",
-  };
-
-  console.log("📤 Payload envoyé :", JSON.stringify(payload));
-
-  const response = await axios.post(SCRIPT_URL, payload, {
-    headers: { "Content-Type": "application/json" },
+    statut:        "validé"
   });
 
-  console.log("✅ Réponse Google Sheet :", JSON.stringify(response.data));
+  console.log("📤 Payload envoyé :", payload);
+
+  // ⚠️ On utilise fetch natif au lieu d'axios
+  // pour éviter la perte du body lors de la redirection Google
+  const response = await fetch(SCRIPT_URL, {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    payload,
+    redirect: "follow",
+  });
+
+  const result = await response.json();
+  console.log("✅ Réponse Google Sheet :", JSON.stringify(result));
+
   return { prixNum, quantiteNum, montantTotal };
 }
 
