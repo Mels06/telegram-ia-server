@@ -32,8 +32,7 @@ function getHistory(chatId) {
 // ==============================
 async function callSheet(action, extraData = {}) {
   const payload = JSON.stringify({ action, ...extraData });
-  console.log(`📤 callSheet(${action}):`, payload);
-
+  
   const response = await fetch(SCRIPT_URL, {
     method:   "POST",
     headers:  { "Content-Type": "application/json" },
@@ -42,10 +41,9 @@ async function callSheet(action, extraData = {}) {
   });
 
   const text   = await response.text();
-  console.log(`📥 callSheet(${action}) réponse:`, text);
-
+  console.log(`📥 callSheet(${action}) FULL:`, text); // ← log complet
+  
   const result = JSON.parse(text);
-  // ✅ Fix : normalise "success" en "ok"
   if (result.status === "success") result.status = "ok";
   return result;
 }
