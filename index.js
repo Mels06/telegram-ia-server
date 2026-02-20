@@ -12,6 +12,9 @@ const SCRIPT_URL     = "https://script.google.com/macros/s/AKfycbxrqgLsHIdnQEvNo
 
 const client = new OpenAI({ apiKey: OPENAI_API_KEY });
 
+// Seuil d'alerte stock
+const SEUIL_ALERTE = 5;
+
 // ==============================
 // NETTOYAGE DES NOMBRES
 // ==============================
@@ -69,6 +72,41 @@ async function sendTelegram(chatId, text) {
     });
   } catch (err) {
     console.error("❌ Telegram:", err.message);
+  }
+}
+
+// ==============================
+// ALERTE STOCK FAIBLE
+// ==============================
+async function checkStockAlerte(chatId, produitVendu) {
+  try {
+    const data = await callSheet("stock");
+    if (data.status !== "ok") return;
+
+    const produitNorm = String(produitVendu).toLowerCase().trim();
+    const item = (data.stock || []).find(s =>
+      String(s.produit).toLowerCase().trim() === produitNorm
+    );
+
+    if (!item) return;
+
+    if (item.quantite_restante <= 0) {
+      await sendTelegram(chatId,
+        `🚨 *ALERTE RUPTURE DE STOCK !*\n\n` +
+        `📦 *${item.produit.toUpperCase()}* est épuisé !\n` +
+        `Stock initial : ${item.stock_initial} | Vendu : ${item.vendu}\n\n` +
+        `⚠️ _Pensez à réapprovisionner._`
+      );
+    } else if (item.quantite_restante <= SEUIL_ALERTE) {
+      await sendTelegram(chatId,
+        `⚠️ *STOCK FAIBLE — ${item.produit.toUpperCase()}*\n\n` +
+        `Il ne reste que *${item.quantite_restante} unité(s)* !\n` +
+        `Stock initial : ${item.stock_initial} | Vendu : ${item.vendu}\n\n` +
+        `📋 _Pensez à réapprovisionner bientôt._`
+      );
+    }
+  } catch (e) {
+    console.error("⚠️ Erreur alerte stock:", e.message);
   }
 }
 
@@ -172,16 +210,15 @@ async function askGPT(chatId, userText) {
           dataContext += `  - ${p} : ${v.quantite} unités, ${v.montant}\n`;
       }
       if (stock.status === "ok") {
-        dataContext += `\n=== STOCK ===\n`;
+        dataContext += `\n=== STOCK ACTUEL ===\n`;
         (stock.stock || []).forEach(s =>
-          dataContext += `  - ${s.produit} : ${s.quantite_restante} unités\n`
+          dataContext += `  - ${s.produit} : ${s.quantite_restante} restant (initial: ${s.stock_initial}, vendu: ${s.vendu})\n`
         );
       }
     } catch (e) {
       console.error("⚠️ Erreur données:", e.message);
     }
 
-    // ✅ Prompt courtois qui répond aux salutations
     const systemPrompt = `Tu es un assistant commercial sympathique et courtois.
 Tu accueilles chaleureusement les salutations (bonjour, hi, salut, bonsoir, merci...) et tu proposes ton aide.
 Pour les questions commerciales, tu utilises UNIQUEMENT les données ci-dessous. Tu n'inventes JAMAIS de chiffres.
@@ -268,8 +305,6 @@ app.post("/webhook", async (req, res) => {
 
         for (const vente of result.ventes) {
           if (!vente.produit) continue;
-
-          // ✅ Nettoyage strict avant enregistrement
           const prix     = toFloat(vente.prix_unitaire);
           const quantite = toInt(vente.quantite);
           const montant  = prix * quantite;
@@ -287,6 +322,9 @@ app.post("/webhook", async (req, res) => {
             msg += `👤 *${vente.nom || "Inconnu"}*`;
             if (vente.telephone) msg += ` | 📞 ${vente.telephone}`;
             msg += `\n📦 ${vente.produit} × ${quantite} × ${prix.toLocaleString("fr-FR")} = *${montant.toLocaleString("fr-FR")}*\n\n`;
+
+            // ✅ Vérifier alerte stock après chaque vente
+            await checkStockAlerte(chatId, vente.produit);
           }
         }
 
@@ -329,8 +367,10 @@ app.post("/webhook", async (req, res) => {
       const data = await callSheet("stock");
       let msg = `📦 *Stock actuel :*\n\n`;
       (data.stock || []).forEach(s => {
-        const e = s.quantite_restante < 10 ? "🔴" : s.quantite_restante < 20 ? "🟡" : "🟢";
-        msg += `${e} *${s.produit}* : ${s.quantite_restante} unités\n`;
+        const restant = s.quantite_restante;
+        const e = restant <= 0 ? "🚨" : restant <= SEUIL_ALERTE ? "🔴" : restant <= 10 ? "🟡" : "🟢";
+        msg += `${e} *${s.produit.toUpperCase()}* : ${restant} restant`;
+        msg += ` _(initial: ${s.stock_initial} | vendu: ${s.vendu})_\n`;
       });
       await sendTelegram(chatId, msg);
       return;
@@ -401,6 +441,8 @@ app.post("/webhook", async (req, res) => {
             await sendTelegram(chatId,
               `✅ *Vente enregistrée !*\n\n👤 ${nom}\n📞 ${tel}\n📦 ${produit}\n💲 ${pN.toLocaleString("fr-FR")}\n🔢 ${qN}\n💰 *${(pN * qN).toLocaleString("fr-FR")}*`
             );
+            // ✅ Alerte stock
+            await checkStockAlerte(chatId, produit);
           } else {
             await sendTelegram(chatId, "⚠️ Erreur enregistrement.");
           }
@@ -425,6 +467,8 @@ app.post("/webhook", async (req, res) => {
         let msg = `✅ *Vente enregistrée !*\n\n👤 ${extracted.nom || "Inconnu"}\n📦 ${extracted.produit}\n💲 ${pN.toLocaleString("fr-FR")}\n🔢 ${qN}\n💰 *${(pN * qN).toLocaleString("fr-FR")}*`;
         if (!extracted.telephone) msg += `\n\n⚠️ _Téléphone manquant._`;
         await sendTelegram(chatId, msg);
+        // ✅ Alerte stock
+        await checkStockAlerte(chatId, extracted.produit);
       }
       return;
     }
