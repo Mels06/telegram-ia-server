@@ -65,10 +65,15 @@ async function askGPT(chatId, userText) {
   try {
     let dataContext = "";
     try {
-      const [todaySales, allStats, stock] = await Promise.all([
+      const now   = new Date();
+      const mois  = now.getMonth() + 1;
+      const annee = now.getFullYear();
+
+      const [todaySales, allStats, stock, monthStats] = await Promise.all([
         callSheet("today_sales"),
         callSheet("all_stats"),
         callSheet("stock"),
+        callSheet("month_stats", { mois, annee }),
       ]);
 
       if (todaySales.status === "ok") {
@@ -82,14 +87,22 @@ async function askGPT(chatId, userText) {
         });
       }
 
+      if (monthStats.status === "ok") {
+        dataContext += `\n=== CA DU MOIS (${monthStats.mois} ${monthStats.annee}) ===\n`;
+        dataContext += `Nombre : ${monthStats.total_ventes} ventes | CA : ${monthStats.total_montant}\n`;
+        for (const [p, v] of Object.entries(monthStats.par_produit || {})) {
+          dataContext += `  - ${p} : ${v.quantite} unités, ${v.montant}\n`;
+        }
+        for (const [jour, v] of Object.entries(monthStats.par_jour || {})) {
+          dataContext += `  - ${jour} : ${v.ventes} vente(s), ${v.montant}\n`;
+        }
+      }
+
       if (allStats.status === "ok") {
-        dataContext += `\n=== STATS GLOBALES ===\n`;
+        dataContext += `\n=== STATS GLOBALES (tous les temps) ===\n`;
         dataContext += `Total : ${allStats.total_ventes} ventes | CA : ${allStats.total_montant}\n`;
         for (const [p, v] of Object.entries(allStats.par_produit || {})) {
           dataContext += `  - ${p} : ${v.quantite} unités, ${v.montant}\n`;
-        }
-        for (const [jour, v] of Object.entries(allStats.par_jour || {})) {
-          dataContext += `  - ${jour} : ${v.ventes} vente(s), ${v.montant}\n`;
         }
       }
 
@@ -179,7 +192,10 @@ app.post("/webhook", async (req, res) => {
         `👋 *Bot commercial*\n\n` +
         `📝 Vente : \`Nom, Tel, Produit, Prix, Quantité\`\n` +
         `💬 Ou : "J'ai vendu 2 soft à Marie pour 15000"\n\n` +
-        `📊 \`commandes\` | 📦 \`stock\` | 📈 \`stats\``
+        `📊 \`commandes\` → ventes du jour\n` +
+        `📅 \`mois\` → CA du mois\n` +
+        `📈 \`stats\` → stats globales\n` +
+        `📦 \`stock\` → état du stock`
       );
       return;
     }
@@ -196,7 +212,7 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    // commandes
+    // commandes du jour
     if (text.toLowerCase() === "commandes") {
       const data = await callSheet("today_sales");
       if (data.total_ventes === 0) {
@@ -215,7 +231,30 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    // stats
+    // CA du mois
+    if (text.toLowerCase() === "mois") {
+      const now   = new Date();
+      const data  = await callSheet("month_stats", {
+        mois:  now.getMonth() + 1,
+        annee: now.getFullYear()
+      });
+      if (data.total_ventes === 0) {
+        await sendTelegram(chatId, `📅 Aucune vente ce mois-ci (${data.mois} ${data.annee}).`);
+        return;
+      }
+      let msg = `📅 *${data.mois} ${data.annee}*\n🔢 *${data.total_ventes}* ventes | 💰 *${Number(data.total_montant).toLocaleString("fr-FR")}*\n\n`;
+      for (const [p, v] of Object.entries(data.par_produit || {})) {
+        msg += `📦 ${p} : ${v.quantite} unités — ${Number(v.montant).toLocaleString("fr-FR")}\n`;
+      }
+      msg += `\n📋 *Par jour :*\n`;
+      for (const [jour, v] of Object.entries(data.par_jour || {})) {
+        msg += `  ${jour} : ${v.ventes} vente(s) — ${Number(v.montant).toLocaleString("fr-FR")}\n`;
+      }
+      await sendTelegram(chatId, msg);
+      return;
+    }
+
+    // stats globales
     if (text.toLowerCase() === "stats") {
       const data = await callSheet("all_stats");
       let msg = `📈 *Stats globales*\n🔢 *${data.total_ventes}* ventes | 💰 *${Number(data.total_montant).toLocaleString("fr-FR")}*\n\n`;
@@ -253,11 +292,11 @@ app.post("/webhook", async (req, res) => {
     const extracted = await extractSale(text);
     if (extracted.is_sale && extracted.produit && extracted.prix_unitaire && extracted.quantite) {
       const result = await callSheet("add_sale", {
-        nom_complet: extracted.nom || "Inconnu",
-        telephone:   extracted.telephone || "",
-        produit:     extracted.produit,
+        nom_complet:   extracted.nom || "Inconnu",
+        telephone:     extracted.telephone || "",
+        produit:       extracted.produit,
         prix_unitaire: extracted.prix_unitaire,
-        quantite:    extracted.quantite,
+        quantite:      extracted.quantite,
       });
       if (result.status === "ok") {
         let msg = `✅ *Vente enregistrée !*\n\n👤 ${extracted.nom || "Inconnu"}\n📦 ${extracted.produit}\n💲 ${extracted.prix_unitaire}\n🔢 ${extracted.quantite}\n💰 *${(extracted.prix_unitaire * extracted.quantite).toLocaleString("fr-FR")}*`;
