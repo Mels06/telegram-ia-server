@@ -62,24 +62,18 @@ async function sendTelegram(chatId, text) {
 // TÉLÉCHARGER IMAGE TELEGRAM → BASE64
 // ==============================
 async function getImageBase64(fileId) {
-  // 1. Récupérer le chemin du fichier
   const fileInfo = await axios.get(
     `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getFile?file_id=${fileId}`
   );
   const filePath = fileInfo.data.result.file_path;
-
-  // 2. Télécharger l'image
   const imageUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${filePath}`;
   const imageRes = await axios.get(imageUrl, { responseType: "arraybuffer" });
-
-  // 3. Convertir en base64
-  const base64 = Buffer.from(imageRes.data).toString("base64");
-  const mimeType = "image/jpeg";
-  return { base64, mimeType };
+  const base64   = Buffer.from(imageRes.data).toString("base64");
+  return { base64, mimeType: "image/jpeg" };
 }
 
 // ==============================
-// ANALYSER IMAGE AVEC GPT-4o VISION
+// ANALYSER IMAGE — PLUSIEURS VENTES
 // ==============================
 async function analyzeImage(base64, mimeType) {
   console.log("🖼️ Analyse image avec GPT-4o Vision...");
@@ -92,37 +86,39 @@ async function analyzeImage(base64, mimeType) {
         content: [
           {
             type: "text",
-            text: `Tu es un assistant commercial. Analyse cette image et extrais les informations de vente.
+            text: `Tu es un assistant commercial. Analyse cette image et extrais TOUTES les ventes présentes.
+Il peut y avoir 1 ou plusieurs ventes sur la même image.
+
 Retourne UNIQUEMENT un JSON avec ce format :
 {
-  "is_sale": true ou false,
-  "nom": "nom du client ou vendeur",
-  "telephone": "numéro de téléphone ou vide",
-  "produit": "nom du produit",
-  "prix_unitaire": nombre,
-  "quantite": nombre,
-  "notes": "autres infos utiles sur le reçu"
+  "ventes": [
+    {
+      "nom": "nom du client",
+      "telephone": "numéro ou vide",
+      "produit": "nom du produit",
+      "prix_unitaire": nombre,
+      "quantite": nombre
+    }
+  ],
+  "notes": "autres infos utiles"
 }
-Si l'image ne contient pas de vente ou reçu, retourne {"is_sale": false, "notes": "description de ce que tu vois"}.
+
+Si aucune vente n'est détectée : {"ventes": [], "notes": "description de ce que tu vois"}
 UNIQUEMENT le JSON, rien d'autre.`
           },
           {
             type: "image_url",
-            image_url: {
-              url: `data:${mimeType};base64,${base64}`,
-            },
+            image_url: { url: `data:${mimeType};base64,${base64}` },
           },
         ],
       },
     ],
-    max_tokens: 500,
+    max_tokens: 1000,
   });
 
-  const raw = response.choices[0].message.content.trim();
-  console.log("🖼️ Résultat Vision:", raw);
-
-  // Nettoyer le JSON si GPT ajoute des backticks
+  const raw   = response.choices[0].message.content.trim();
   const clean = raw.replace(/```json|```/g, "").trim();
+  console.log("🖼️ Résultat Vision:", clean);
   return JSON.parse(clean);
 }
 
@@ -134,14 +130,11 @@ async function askGPT(chatId, userText) {
     let dataContext = "";
     try {
       const now   = new Date();
-      const mois  = now.getMonth() + 1;
-      const annee = now.getFullYear();
-
       const [todaySales, allStats, stock, monthStats] = await Promise.all([
         callSheet("today_sales"),
         callSheet("all_stats"),
         callSheet("stock"),
-        callSheet("month_stats", { mois, annee }),
+        callSheet("month_stats", { mois: now.getMonth() + 1, annee: now.getFullYear() }),
       ]);
 
       if (todaySales.status === "ok") {
@@ -154,15 +147,13 @@ async function askGPT(chatId, userText) {
           dataContext += `  • ${v.nom || "?"} : ${v.quantite}x ${v.produit} à ${v.prix} = ${v.montant}\n`;
         });
       }
-
       if (monthStats.status === "ok") {
         dataContext += `\n=== CA DU MOIS (${monthStats.mois} ${monthStats.annee}) ===\n`;
-        dataContext += `Nombre : ${monthStats.total_ventes} ventes | CA : ${monthStats.total_montant}\n`;
+        dataContext += `Nombre : ${monthStats.total_ventes} | CA : ${monthStats.total_montant}\n`;
         for (const [p, v] of Object.entries(monthStats.par_produit || {})) {
           dataContext += `  - ${p} : ${v.quantite} unités, ${v.montant}\n`;
         }
       }
-
       if (allStats.status === "ok") {
         dataContext += `\n=== STATS GLOBALES ===\n`;
         dataContext += `Total : ${allStats.total_ventes} ventes | CA : ${allStats.total_montant}\n`;
@@ -170,7 +161,6 @@ async function askGPT(chatId, userText) {
           dataContext += `  - ${p} : ${v.quantite} unités, ${v.montant}\n`;
         }
       }
-
       if (stock.status === "ok") {
         dataContext += `\n=== STOCK ===\n`;
         (stock.stock || []).forEach(s => {
@@ -183,7 +173,6 @@ async function askGPT(chatId, userText) {
 
     const systemPrompt = `Tu es un assistant commercial. Tu réponds UNIQUEMENT sur les ventes, stocks, produits et chiffres.
 Tu utilises UNIQUEMENT les données ci-dessous. Tu n'inventes RIEN.
-Si une info manque, dis-le clairement.
 Date : ${new Date().toLocaleString("fr-FR")}
 
 DONNÉES RÉELLES :
@@ -250,67 +239,58 @@ app.post("/webhook", async (req, res) => {
     if (message.photo) {
       await sendTelegram(chatId, "🖼️ Image reçue, analyse en cours...");
       try {
-        // Prendre la meilleure qualité (dernière dans le tableau)
         const photo  = message.photo[message.photo.length - 1];
-        const fileId = photo.file_id;
-        const caption = message.caption || "";
-
-        const { base64, mimeType } = await getImageBase64(fileId);
+        const { base64, mimeType } = await getImageBase64(photo.file_id);
         const result = await analyzeImage(base64, mimeType);
 
-        console.log("🖼️ Analyse:", JSON.stringify(result));
-
-        if (!result.is_sale) {
+        if (!result.ventes || result.ventes.length === 0) {
           await sendTelegram(chatId,
-            `🖼️ Je vois : ${result.notes || "image non reconnue comme reçu"}\n\n` +
-            `Si c'est un reçu, envoie les infos manuellement :\n` +
-            `\`Nom, Téléphone, Produit, Prix, Quantité\``
+            `🖼️ Aucune vente détectée.\n${result.notes ? `Je vois : ${result.notes}` : ""}\n\nEnvoie les infos manuellement : \`Nom, Tel, Produit, Prix, Quantité\``
           );
           return;
         }
 
-        // Vérifier que les données essentielles sont présentes
-        if (!result.produit || !result.prix_unitaire || !result.quantite) {
-          await sendTelegram(chatId,
-            `⚠️ *Image lue mais données incomplètes :*\n\n` +
-            `${result.notes || ""}\n\n` +
-            `Complète manuellement : \`Nom, Téléphone, Produit, Prix, Quantité\``
-          );
-          return;
+        // Enregistrer TOUTES les ventes
+        let msg = `✅ *${result.ventes.length} vente(s) enregistrée(s) !*\n\n`;
+        let totalGlobal = 0;
+
+        for (const vente of result.ventes) {
+          if (!vente.produit || !vente.prix_unitaire || !vente.quantite) continue;
+
+          const saleResult = await callSheet("add_sale", {
+            nom_complet:   vente.nom || "Inconnu",
+            telephone:     vente.telephone || "",
+            produit:       vente.produit,
+            prix_unitaire: vente.prix_unitaire,
+            quantite:      vente.quantite,
+          });
+
+          const total = vente.prix_unitaire * vente.quantite;
+          totalGlobal += total;
+
+          if (saleResult.status === "ok") {
+            msg += `👤 *${vente.nom || "Inconnu"}*`;
+            if (vente.telephone) msg += ` | 📞 ${vente.telephone}`;
+            msg += `\n📦 ${vente.produit} × ${vente.quantite} × ${Number(vente.prix_unitaire).toLocaleString("fr-FR")} = *${total.toLocaleString("fr-FR")}*\n\n`;
+          }
         }
 
-        // Enregistrer la vente
-        const saleResult = await callSheet("add_sale", {
-          nom_complet:   result.nom || caption || "Inconnu",
-          telephone:     result.telephone || "",
-          produit:       result.produit,
-          prix_unitaire: result.prix_unitaire,
-          quantite:      result.quantite,
-        });
-
-        if (saleResult.status === "ok") {
-          const total = result.prix_unitaire * result.quantite;
-          let msg = `✅ *Reçu lu et vente enregistrée !*\n\n`;
-          msg += `👤 ${result.nom || "Inconnu"}\n`;
-          if (result.telephone) msg += `📞 ${result.telephone}\n`;
-          msg += `📦 ${result.produit}\n`;
-          msg += `💲 ${Number(result.prix_unitaire).toLocaleString("fr-FR")}\n`;
-          msg += `🔢 ${result.quantite}\n`;
-          msg += `💰 *${total.toLocaleString("fr-FR")}*`;
-          if (result.notes) msg += `\n\n📝 _${result.notes}_`;
-          await sendTelegram(chatId, msg);
-        } else {
-          await sendTelegram(chatId, "⚠️ Image lue mais erreur lors de l'enregistrement.");
+        if (result.ventes.length > 1) {
+          msg += `💰 *Total image : ${totalGlobal.toLocaleString("fr-FR")}*`;
         }
+
+        if (result.notes) msg += `\n\n📝 _${result.notes}_`;
+
+        await sendTelegram(chatId, msg);
 
       } catch (e) {
-        console.error("❌ Erreur analyse image:", e.message);
+        console.error("❌ Erreur image:", e.message);
         await sendTelegram(chatId, "⚠️ Impossible de lire l'image. Envoie les infos manuellement.");
       }
       return;
     }
 
-    // ── GESTION DES MESSAGES TEXTE ─────────────────────────────────
+    // ── GESTION DES TEXTES ─────────────────────────────────────────
     if (!message.text) return;
     const text = message.text.trim();
     console.log("📩", text);
@@ -321,7 +301,7 @@ app.post("/webhook", async (req, res) => {
       await sendTelegram(chatId,
         `👋 *Bot commercial*\n\n` +
         `📝 Vente texte : \`Nom, Tel, Produit, Prix, Quantité\`\n` +
-        `🖼️ Vente image : envoie une photo du reçu\n` +
+        `🖼️ Vente image : envoie une photo (plusieurs ventes supportées)\n` +
         `💬 Ou : "J'ai vendu 2 soft à Marie pour 15000"\n\n` +
         `📊 \`commandes\` → ventes du jour\n` +
         `📅 \`mois\` → CA du mois\n` +
@@ -367,7 +347,7 @@ app.post("/webhook", async (req, res) => {
       const now  = new Date();
       const data = await callSheet("month_stats", { mois: now.getMonth() + 1, annee: now.getFullYear() });
       if (data.total_ventes === 0) {
-        await sendTelegram(chatId, `📅 Aucune vente ce mois-ci (${data.mois} ${data.annee}).`);
+        await sendTelegram(chatId, `📅 Aucune vente ce mois (${data.mois} ${data.annee}).`);
         return;
       }
       let msg = `📅 *${data.mois} ${data.annee}*\n🔢 *${data.total_ventes}* ventes | 💰 *${Number(data.total_montant).toLocaleString("fr-FR")}*\n\n`;
@@ -416,7 +396,7 @@ app.post("/webhook", async (req, res) => {
       }
     }
 
-    // Langage naturel — vente ?
+    // Langage naturel
     const extracted = await extractSale(text);
     if (extracted.is_sale && extracted.produit && extracted.prix_unitaire && extracted.quantite) {
       const result = await callSheet("add_sale", {
@@ -434,7 +414,7 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    // Question → GPT avec données réelles
+    // Question → GPT
     const reply = await askGPT(chatId, text);
     await sendTelegram(chatId, reply);
 
