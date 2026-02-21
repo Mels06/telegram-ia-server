@@ -12,6 +12,9 @@ const SCRIPT_URL     = "https://script.google.com/macros/s/AKfycbxrqgLsHIdnQEvNo
 
 const client = new OpenAI({ apiKey: OPENAI_API_KEY });
 
+// Seuil d'alerte stock
+const SEUIL_ALERTE = 5;
+
 // ==============================
 // NETTOYAGE DES NOMBRES
 // ==============================
@@ -42,7 +45,7 @@ function getHistory(chatId) { return userMemory[chatId] || []; }
 // ==============================
 async function callSheet(action, extraData = {}) {
   const payload = JSON.stringify({ action, ...extraData });
-  console.log(📤 callSheet(${action}):, payload);
+  console.log(`📤 callSheet(${action}):`, payload);
 
   const response = await fetch(SCRIPT_URL, {
     method:   "POST",
@@ -52,7 +55,7 @@ async function callSheet(action, extraData = {}) {
   });
 
   const text = await response.text();
-  console.log(📥 callSheet(${action}):, text);
+  console.log(`📥 callSheet(${action}):`, text);
 
   const result = JSON.parse(text);
   if (result.status === "success") result.status = "ok";
@@ -64,7 +67,7 @@ async function callSheet(action, extraData = {}) {
 // ==============================
 async function sendTelegram(chatId, text) {
   try {
-    await axios.post(https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage, {
+    await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
       chat_id: chatId, text, parse_mode: "Markdown",
     });
   } catch (err) {
@@ -73,14 +76,49 @@ async function sendTelegram(chatId, text) {
 }
 
 // ==============================
+// ALERTE STOCK FAIBLE
+// ==============================
+async function checkStockAlerte(chatId, produitVendu) {
+  try {
+    const data = await callSheet("stock");
+    if (data.status !== "ok") return;
+
+    const produitNorm = String(produitVendu).toLowerCase().trim();
+    const item = (data.stock || []).find(s =>
+      String(s.produit).toLowerCase().trim() === produitNorm
+    );
+
+    if (!item) return;
+
+    if (item.quantite_restante <= 0) {
+      await sendTelegram(chatId,
+        `🚨 *ALERTE RUPTURE DE STOCK !*\n\n` +
+        `📦 *${item.produit.toUpperCase()}* est épuisé !\n` +
+        `Stock initial : ${item.stock_initial} | Vendu : ${item.vendu}\n\n` +
+        `⚠️ _Pensez à réapprovisionner._`
+      );
+    } else if (item.quantite_restante <= SEUIL_ALERTE) {
+      await sendTelegram(chatId,
+        `⚠️ *STOCK FAIBLE — ${item.produit.toUpperCase()}*\n\n` +
+        `Il ne reste que *${item.quantite_restante} unité(s)* !\n` +
+        `Stock initial : ${item.stock_initial} | Vendu : ${item.vendu}\n\n` +
+        `📋 _Pensez à réapprovisionner bientôt._`
+      );
+    }
+  } catch (e) {
+    console.error("⚠️ Erreur alerte stock:", e.message);
+  }
+}
+
+// ==============================
 // IMAGE → BASE64
 // ==============================
 async function getImageBase64(fileId) {
   const fileInfo = await axios.get(
-    https://api.telegram.org/bot${TELEGRAM_TOKEN}/getFile?file_id=${fileId}
+    `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getFile?file_id=${fileId}`
   );
   const filePath = fileInfo.data.result.file_path;
-  const imageUrl = https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${filePath};
+  const imageUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${filePath}`;
   const imageRes = await axios.get(imageUrl, { responseType: "arraybuffer" });
   const base64   = Buffer.from(imageRes.data).toString("base64");
   return { base64, mimeType: "image/jpeg" };
@@ -122,7 +160,7 @@ UNIQUEMENT le JSON, rien d'autre.`
         },
         {
           type: "image_url",
-          image_url: { url: data:${mimeType};base64,${base64} },
+          image_url: { url: `data:${mimeType};base64,${base64}` },
         },
       ],
     }],
@@ -130,7 +168,7 @@ UNIQUEMENT le JSON, rien d'autre.`
   });
 
   const raw   = response.choices[0].message.content.trim();
-  const clean = raw.replace(/json|/g, "").trim();
+  const clean = raw.replace(/```json|```/g, "").trim();
   console.log("🖼️ Vision:", clean);
   return JSON.parse(clean);
 }
@@ -151,8 +189,8 @@ async function askGPT(chatId, userText) {
       ]);
 
       if (todaySales.status === "ok") {
-        dataContext += \n=== VENTES DU JOUR (${todaySales.date}) ===\n;
-        dataContext += Nombre : ${todaySales.total_ventes} | CA : ${todaySales.total_montant}\n;
+        dataContext += `\n=== VENTES DU JOUR (${todaySales.date}) ===\n`;
+        dataContext += `Nombre : ${todaySales.total_ventes} | CA : ${todaySales.total_montant}\n`;
         for (const [p, v] of Object.entries(todaySales.par_produit || {}))
           dataContext += `  - ${p} : ${v.quantite} unités, ${v.montant}\n`;
         (todaySales.detail || []).forEach(v =>
@@ -160,28 +198,27 @@ async function askGPT(chatId, userText) {
         );
       }
       if (monthStats.status === "ok") {
-        dataContext += \n=== CA DU MOIS (${monthStats.mois} ${monthStats.annee}) ===\n;
-        dataContext += Nombre : ${monthStats.total_ventes} | CA : ${monthStats.total_montant}\n;
+        dataContext += `\n=== CA DU MOIS (${monthStats.mois} ${monthStats.annee}) ===\n`;
+        dataContext += `Nombre : ${monthStats.total_ventes} | CA : ${monthStats.total_montant}\n`;
         for (const [p, v] of Object.entries(monthStats.par_produit || {}))
           dataContext += `  - ${p} : ${v.quantite} unités, ${v.montant}\n`;
       }
       if (allStats.status === "ok") {
-        dataContext += \n=== STATS GLOBALES ===\n;
-        dataContext += Total : ${allStats.total_ventes} ventes | CA : ${allStats.total_montant}\n;
+        dataContext += `\n=== STATS GLOBALES ===\n`;
+        dataContext += `Total : ${allStats.total_ventes} ventes | CA : ${allStats.total_montant}\n`;
         for (const [p, v] of Object.entries(allStats.par_produit || {}))
           dataContext += `  - ${p} : ${v.quantite} unités, ${v.montant}\n`;
       }
       if (stock.status === "ok") {
-        dataContext += \n=== STOCK ===\n;
+        dataContext += `\n=== STOCK ACTUEL ===\n`;
         (stock.stock || []).forEach(s =>
-          dataContext += `  - ${s.produit} : ${s.quantite_restante} unités\n`
+          dataContext += `  - ${s.produit} : ${s.quantite_restante} restant (initial: ${s.stock_initial}, vendu: ${s.vendu})\n`
         );
       }
     } catch (e) {
       console.error("⚠️ Erreur données:", e.message);
     }
 
-    // ✅ Prompt courtois qui répond aux salutations
     const systemPrompt = `Tu es un assistant commercial sympathique et courtois.
 Tu accueilles chaleureusement les salutations (bonjour, hi, salut, bonsoir, merci...) et tu proposes ton aide.
 Pour les questions commerciales, tu utilises UNIQUEMENT les données ci-dessous. Tu n'inventes JAMAIS de chiffres.
@@ -258,18 +295,16 @@ app.post("/webhook", async (req, res) => {
 
         if (!result.ventes || result.ventes.length === 0) {
           await sendTelegram(chatId,
-            🖼️ Aucune vente détectée.\n${result.notes ? `Je vois : ${result.notes} : ""}\n\nEnvoie manuellement : \Nom, Tel, Produit, Prix, Quantité\`
+            `🖼️ Aucune vente détectée.\n${result.notes ? `Je vois : ${result.notes}` : ""}\n\nEnvoie manuellement : \`Nom, Tel, Produit, Prix, Quantité\``
           );
           return;
         }
 
-        let msg = ✅ *${result.ventes.length} vente(s) enregistrée(s) !*\n\n;
+        let msg = `✅ *${result.ventes.length} vente(s) enregistrée(s) !*\n\n`;
         let totalGlobal = 0;
 
         for (const vente of result.ventes) {
           if (!vente.produit) continue;
-
-          // ✅ Nettoyage strict avant enregistrement
           const prix     = toFloat(vente.prix_unitaire);
           const quantite = toInt(vente.quantite);
           const montant  = prix * quantite;
@@ -284,15 +319,18 @@ app.post("/webhook", async (req, res) => {
           });
 
           if (saleResult.status === "ok") {
-            msg += 👤 *${vente.nom || "Inconnu"}*;
+            msg += `👤 *${vente.nom || "Inconnu"}*`;
             if (vente.telephone) msg += ` | 📞 ${vente.telephone}`;
-            msg += \n📦 ${vente.produit} × ${quantite} × ${prix.toLocaleString("fr-FR")} = *${montant.toLocaleString("fr-FR")}*\n\n;
+            msg += `\n📦 ${vente.produit} × ${quantite} × ${prix.toLocaleString("fr-FR")} = *${montant.toLocaleString("fr-FR")}*\n\n`;
+
+            // ✅ Vérifier alerte stock après chaque vente
+            await checkStockAlerte(chatId, vente.produit);
           }
         }
 
         if (result.ventes.length > 1)
-          msg += 💰 *Total : ${totalGlobal.toLocaleString("fr-FR")}*;
-        if (result.notes) msg += \n\n📝 _${result.notes}_;
+          msg += `💰 *Total : ${totalGlobal.toLocaleString("fr-FR")}*`;
+        if (result.notes) msg += `\n\n📝 _${result.notes}_`;
 
         await sendTelegram(chatId, msg);
 
@@ -312,14 +350,14 @@ app.post("/webhook", async (req, res) => {
     if (text === "/start") {
       userMemory[chatId] = [];
       await sendTelegram(chatId,
-        👋 *Bonjour ! Je suis votre assistant commercial.*\n\n +
-        📝 *Vente rapide :* \`Nom, Tel, Produit, Prix, Quantité\\n` +
-        🖼️ *Photo reçu :* envoie l'image directement\n +
-        💬 *Langage naturel :* "J'ai vendu 2 soft à Marie pour 15000"\n\n +
-        📊 \`commandes\ → ventes du jour\n` +
-        📅 \`mois\ → CA du mois\n` +
-        📈 \`stats\ → statistiques globales\n` +
-        📦 \`stock\ → état du stock`
+        `👋 *Bonjour ! Je suis votre assistant commercial.*\n\n` +
+        `📝 *Vente rapide :* \`Nom, Tel, Produit, Prix, Quantité\`\n` +
+        `🖼️ *Photo reçu :* envoie l'image directement\n` +
+        `💬 *Langage naturel :* "J'ai vendu 2 soft à Marie pour 15000"\n\n` +
+        `📊 \`commandes\` → ventes du jour\n` +
+        `📅 \`mois\` → CA du mois\n` +
+        `📈 \`stats\` → statistiques globales\n` +
+        `📦 \`stock\` → état du stock`
       );
       return;
     }
@@ -327,10 +365,12 @@ app.post("/webhook", async (req, res) => {
     // stock
     if (text.toLowerCase() === "stock") {
       const data = await callSheet("stock");
-      let msg = 📦 *Stock actuel :*\n\n;
+      let msg = `📦 *Stock actuel :*\n\n`;
       (data.stock || []).forEach(s => {
-        const e = s.quantite_restante < 10 ? "🔴" : s.quantite_restante < 20 ? "🟡" : "🟢";
-        msg += ${e} *${s.produit}* : ${s.quantite_restante} unités\n;
+        const restant = s.quantite_restante;
+        const e = restant <= 0 ? "🚨" : restant <= SEUIL_ALERTE ? "🔴" : restant <= 10 ? "🟡" : "🟢";
+        msg += `${e} *${s.produit.toUpperCase()}* : ${restant} restant`;
+        msg += ` _(initial: ${s.stock_initial} | vendu: ${s.vendu})_\n`;
       });
       await sendTelegram(chatId, msg);
       return;
@@ -343,12 +383,12 @@ app.post("/webhook", async (req, res) => {
         await sendTelegram(chatId, "📊 Aucune vente enregistrée aujourd'hui.");
         return;
       }
-      let msg = 📊 *Ventes du ${data.date}*\n🔢 *${data.total_ventes}* ventes | 💰 *${Number(data.total_montant).toLocaleString("fr-FR")}*\n\n;
+      let msg = `📊 *Ventes du ${data.date}*\n🔢 *${data.total_ventes}* ventes | 💰 *${Number(data.total_montant).toLocaleString("fr-FR")}*\n\n`;
       for (const [p, v] of Object.entries(data.par_produit || {}))
-        msg += 📦 ${p} : ${v.quantite} unités — ${Number(v.montant).toLocaleString("fr-FR")}\n;
-      msg += \n📋 *Détail :*\n;
+        msg += `📦 ${p} : ${v.quantite} unités — ${Number(v.montant).toLocaleString("fr-FR")}\n`;
+      msg += `\n📋 *Détail :*\n`;
       (data.detail || []).forEach((v, i) =>
-        msg += ${i + 1}. ${v.nom || "?"} — ${v.quantite}x ${v.produit} — ${Number(v.montant).toLocaleString("fr-FR")}\n
+        msg += `${i + 1}. ${v.nom || "?"} — ${v.quantite}x ${v.produit} — ${Number(v.montant).toLocaleString("fr-FR")}\n`
       );
       await sendTelegram(chatId, msg);
       return;
@@ -359,13 +399,13 @@ app.post("/webhook", async (req, res) => {
       const now  = new Date();
       const data = await callSheet("month_stats", { mois: now.getMonth() + 1, annee: now.getFullYear() });
       if (data.total_ventes === 0) {
-        await sendTelegram(chatId, 📅 Aucune vente ce mois (${data.mois} ${data.annee}).);
+        await sendTelegram(chatId, `📅 Aucune vente ce mois (${data.mois} ${data.annee}).`);
         return;
       }
-      let msg = 📅 *${data.mois} ${data.annee}*\n🔢 *${data.total_ventes}* ventes | 💰 *${Number(data.total_montant).toLocaleString("fr-FR")}*\n\n;
+      let msg = `📅 *${data.mois} ${data.annee}*\n🔢 *${data.total_ventes}* ventes | 💰 *${Number(data.total_montant).toLocaleString("fr-FR")}*\n\n`;
       for (const [p, v] of Object.entries(data.par_produit || {}))
-        msg += 📦 ${p} : ${v.quantite} unités — ${Number(v.montant).toLocaleString("fr-FR")}\n;
-      msg += \n📋 *Par jour :*\n;
+        msg += `📦 ${p} : ${v.quantite} unités — ${Number(v.montant).toLocaleString("fr-FR")}\n`;
+      msg += `\n📋 *Par jour :*\n`;
       for (const [jour, v] of Object.entries(data.par_jour || {}))
         msg += `  ${jour} : ${v.ventes} vente(s) — ${Number(v.montant).toLocaleString("fr-FR")}\n`;
       await sendTelegram(chatId, msg);
@@ -375,9 +415,9 @@ app.post("/webhook", async (req, res) => {
     // stats globales
     if (text.toLowerCase() === "stats") {
       const data = await callSheet("all_stats");
-      let msg = 📈 *Statistiques globales*\n🔢 *${data.total_ventes}* ventes | 💰 *${Number(data.total_montant).toLocaleString("fr-FR")}*\n\n;
+      let msg = `📈 *Statistiques globales*\n🔢 *${data.total_ventes}* ventes | 💰 *${Number(data.total_montant).toLocaleString("fr-FR")}*\n\n`;
       for (const [p, v] of Object.entries(data.par_produit || {}))
-        msg += 📦 ${p} : ${v.quantite} unités — ${Number(v.montant).toLocaleString("fr-FR")}\n;
+        msg += `📦 ${p} : ${v.quantite} unités — ${Number(v.montant).toLocaleString("fr-FR")}\n`;
       await sendTelegram(chatId, msg);
       return;
     }
@@ -399,8 +439,10 @@ app.post("/webhook", async (req, res) => {
           });
           if (result.status === "ok") {
             await sendTelegram(chatId,
-              ✅ *Vente enregistrée !*\n\n👤 ${nom}\n📞 ${tel}\n📦 ${produit}\n💲 ${pN.toLocaleString("fr-FR")}\n🔢 ${qN}\n💰 *${(pN * qN).toLocaleString("fr-FR")}*
+              `✅ *Vente enregistrée !*\n\n👤 ${nom}\n📞 ${tel}\n📦 ${produit}\n💲 ${pN.toLocaleString("fr-FR")}\n🔢 ${qN}\n💰 *${(pN * qN).toLocaleString("fr-FR")}*`
             );
+            // ✅ Alerte stock
+            await checkStockAlerte(chatId, produit);
           } else {
             await sendTelegram(chatId, "⚠️ Erreur enregistrement.");
           }
@@ -422,9 +464,11 @@ app.post("/webhook", async (req, res) => {
         quantite:      qN,
       });
       if (result.status === "ok") {
-        let msg = ✅ *Vente enregistrée !*\n\n👤 ${extracted.nom || "Inconnu"}\n📦 ${extracted.produit}\n💲 ${pN.toLocaleString("fr-FR")}\n🔢 ${qN}\n💰 *${(pN * qN).toLocaleString("fr-FR")}*;
-        if (!extracted.telephone) msg += \n\n⚠️ _Téléphone manquant._;
+        let msg = `✅ *Vente enregistrée !*\n\n👤 ${extracted.nom || "Inconnu"}\n📦 ${extracted.produit}\n💲 ${pN.toLocaleString("fr-FR")}\n🔢 ${qN}\n💰 *${(pN * qN).toLocaleString("fr-FR")}*`;
+        if (!extracted.telephone) msg += `\n\n⚠️ _Téléphone manquant._`;
         await sendTelegram(chatId, msg);
+        // ✅ Alerte stock
+        await checkStockAlerte(chatId, extracted.produit);
       }
       return;
     }
@@ -439,4 +483,4 @@ app.post("/webhook", async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(🚀 Port ${PORT}));
+app.listen(PORT, () => console.log(`🚀 Port ${PORT}`));
