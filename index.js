@@ -12,8 +12,45 @@ const SCRIPT_URL     = "https://script.google.com/macros/s/AKfycbxrqgLsHIdnQEvNo
 
 const client = new OpenAI({ apiKey: OPENAI_API_KEY });
 
-// Seuil d'alerte stock
-const SEUIL_ALERTE = 5;
+// ==============================
+// MOTS DE PASSE & RÔLES
+// ==============================
+const MOTS_DE_PASSE = {
+  "admin@26":   "admin",
+  "manager@26": "manager",
+  "vendeur@26": "vendeur",
+};
+
+// Permissions par rôle
+const PERMISSIONS = {
+  admin:   ["vente", "commandes", "stats", "stock", "mois", "gpt"],
+  manager: ["vente", "commandes", "stats", "stock", "mois", "gpt"],
+  vendeur: ["vente"],
+};
+
+// ==============================
+// SESSIONS UTILISATEURS
+// ==============================
+// { chatId: { role, nom } }
+const sessions = {};
+
+function getRole(chatId)   { return sessions[chatId]?.role || null; }
+function peutFaire(chatId, action) {
+  const role = getRole(chatId);
+  if (!role) return false;
+  return PERMISSIONS[role].includes(action);
+}
+
+// ==============================
+// MÉMOIRE PAR UTILISATEUR
+// ==============================
+const userMemory = {};
+function addToHistory(chatId, role, content) {
+  if (!userMemory[chatId]) userMemory[chatId] = [];
+  userMemory[chatId].push({ role, content });
+  if (userMemory[chatId].length > 20) userMemory[chatId] = userMemory[chatId].slice(-20);
+}
+function getHistory(chatId) { return userMemory[chatId] || []; }
 
 // ==============================
 // NETTOYAGE DES NOMBRES
@@ -28,17 +65,6 @@ function toInt(val) {
   const n = parseInt(String(val || "0").replace(/[^0-9]/g, ""), 10);
   return isNaN(n) ? 0 : n;
 }
-
-// ==============================
-// MÉMOIRE PAR UTILISATEUR
-// ==============================
-const userMemory = {};
-function addToHistory(chatId, role, content) {
-  if (!userMemory[chatId]) userMemory[chatId] = [];
-  userMemory[chatId].push({ role, content });
-  if (userMemory[chatId].length > 20) userMemory[chatId] = userMemory[chatId].slice(-20);
-}
-function getHistory(chatId) { return userMemory[chatId] || []; }
 
 // ==============================
 // APPEL GOOGLE SHEET
@@ -78,31 +104,23 @@ async function sendTelegram(chatId, text) {
 // ==============================
 // ALERTE STOCK FAIBLE
 // ==============================
+const SEUIL_ALERTE = 5;
 async function checkStockAlerte(chatId, produitVendu) {
   try {
     const data = await callSheet("stock");
     if (data.status !== "ok") return;
-
     const produitNorm = String(produitVendu).toLowerCase().trim();
     const item = (data.stock || []).find(s =>
       String(s.produit).toLowerCase().trim() === produitNorm
     );
-
     if (!item) return;
-
     if (item.quantite_restante <= 0) {
       await sendTelegram(chatId,
-        `🚨 *ALERTE RUPTURE DE STOCK !*\n\n` +
-        `📦 *${item.produit.toUpperCase()}* est épuisé !\n` +
-        `Stock initial : ${item.stock_initial} | Vendu : ${item.vendu}\n\n` +
-        `⚠️ _Pensez à réapprovisionner._`
+        `🚨 *RUPTURE DE STOCK — ${item.produit.toUpperCase()}*\n\nStock épuisé ! _(initial: ${item.stock_initial} | vendu: ${item.vendu})_\n\n⚠️ _Pensez à réapprovisionner._`
       );
     } else if (item.quantite_restante <= SEUIL_ALERTE) {
       await sendTelegram(chatId,
-        `⚠️ *STOCK FAIBLE — ${item.produit.toUpperCase()}*\n\n` +
-        `Il ne reste que *${item.quantite_restante} unité(s)* !\n` +
-        `Stock initial : ${item.stock_initial} | Vendu : ${item.vendu}\n\n` +
-        `📋 _Pensez à réapprovisionner bientôt._`
+        `⚠️ *STOCK FAIBLE — ${item.produit.toUpperCase()}*\n\nIl ne reste que *${item.quantite_restante} unité(s)* !\n_(initial: ${item.stock_initial} | vendu: ${item.vendu})_\n\n📋 _Pensez à réapprovisionner._`
       );
     }
   } catch (e) {
@@ -114,22 +132,17 @@ async function checkStockAlerte(chatId, produitVendu) {
 // IMAGE → BASE64
 // ==============================
 async function getImageBase64(fileId) {
-  const fileInfo = await axios.get(
-    `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getFile?file_id=${fileId}`
-  );
+  const fileInfo = await axios.get(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/getFile?file_id=${fileId}`);
   const filePath = fileInfo.data.result.file_path;
   const imageUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${filePath}`;
   const imageRes = await axios.get(imageUrl, { responseType: "arraybuffer" });
-  const base64   = Buffer.from(imageRes.data).toString("base64");
-  return { base64, mimeType: "image/jpeg" };
+  return { base64: Buffer.from(imageRes.data).toString("base64"), mimeType: "image/jpeg" };
 }
 
 // ==============================
-// ANALYSER IMAGE — TOUTES LES VENTES
+// ANALYSER IMAGE
 // ==============================
 async function analyzeImage(base64, mimeType) {
-  console.log("🖼️ Analyse image GPT-4o...");
-
   const response = await client.chat.completions.create({
     model: "gpt-4o",
     messages: [{
@@ -137,38 +150,24 @@ async function analyzeImage(base64, mimeType) {
       content: [
         {
           type: "text",
-          text: `Tu es un assistant commercial. Analyse cette image et extrais TOUTES les ventes présentes.
-Il peut y avoir 1 ou plusieurs ventes sur la même image.
-
+          text: `Analyse cette image et extrais TOUTES les ventes.
 Retourne UNIQUEMENT ce JSON :
 {
   "ventes": [
-    {
-      "nom": "nom du client",
-      "telephone": "numéro ou chaîne vide",
-      "produit": "nom du produit",
-      "prix_unitaire": 0,
-      "quantite": 0
-    }
+    { "nom": "...", "telephone": "...", "produit": "...", "prix_unitaire": 0, "quantite": 0 }
   ],
-  "notes": "autres infos utiles"
+  "notes": "..."
 }
-
-IMPORTANT : prix_unitaire et quantite sont des NOMBRES purs, jamais du texte ou des dates.
-Si aucune vente : {"ventes": [], "notes": "description de ce que tu vois"}
-UNIQUEMENT le JSON, rien d'autre.`
+prix_unitaire et quantite sont des NOMBRES purs.
+Si aucune vente : {"ventes": [], "notes": "description"}
+UNIQUEMENT le JSON.`
         },
-        {
-          type: "image_url",
-          image_url: { url: `data:${mimeType};base64,${base64}` },
-        },
+        { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64}` } },
       ],
     }],
     max_tokens: 1000,
   });
-
-  const raw   = response.choices[0].message.content.trim();
-  const clean = raw.replace(/```json|```/g, "").trim();
+  const clean = response.choices[0].message.content.trim().replace(/```json|```/g, "").trim();
   console.log("🖼️ Vision:", clean);
   return JSON.parse(clean);
 }
@@ -212,7 +211,7 @@ async function askGPT(chatId, userText) {
       if (stock.status === "ok") {
         dataContext += `\n=== STOCK ACTUEL ===\n`;
         (stock.stock || []).forEach(s =>
-          dataContext += `  - ${s.produit} : ${s.quantite_restante} restant (initial: ${s.stock_initial}, vendu: ${s.vendu})\n`
+          dataContext += `  - ${s.produit} : ${s.quantite_restante} restant (initial: ${s.stock_initial} | vendu: ${s.vendu})\n`
         );
       }
     } catch (e) {
@@ -220,12 +219,11 @@ async function askGPT(chatId, userText) {
     }
 
     const systemPrompt = `Tu es un assistant commercial sympathique et courtois.
-Tu accueilles chaleureusement les salutations (bonjour, hi, salut, bonsoir, merci...) et tu proposes ton aide.
+Tu accueilles chaleureusement les salutations et proposes ton aide.
 Pour les questions commerciales, tu utilises UNIQUEMENT les données ci-dessous. Tu n'inventes JAMAIS de chiffres.
-Si une info n'est pas dans les données, dis-le clairement.
 Date : ${new Date().toLocaleString("fr-FR")}
 
-DONNÉES RÉELLES DU GOOGLE SHEET :
+DONNÉES RÉELLES :
 ${dataContext || "Aucune donnée disponible."}`;
 
     const response = await client.chat.completions.create({
@@ -241,7 +239,6 @@ ${dataContext || "Aucune donnée disponible."}`;
     addToHistory(chatId, "user", userText);
     addToHistory(chatId, "assistant", reply);
     return reply;
-
   } catch (err) {
     console.error("❌ GPT:", err.message);
     return "⚠️ Erreur GPT. Réessaie.";
@@ -260,7 +257,6 @@ async function extractSale(text) {
           role: "system",
           content: `Analyse si c'est une vente. Si oui :
 {"is_sale":true,"nom":"...","telephone":"...","produit":"...","prix_unitaire":0,"quantite":0}
-prix_unitaire et quantite sont des NOMBRES purs, jamais du texte.
 Si non : {"is_sale":false}
 UNIQUEMENT le JSON.`
         },
@@ -270,6 +266,38 @@ UNIQUEMENT le JSON.`
     return JSON.parse(r.choices[0].message.content.trim());
   } catch (e) {
     return { is_sale: false };
+  }
+}
+
+// ==============================
+// MESSAGE DE BIENVENUE PAR RÔLE
+// ==============================
+function menuParRole(role) {
+  if (role === "admin") {
+    return `👑 *Connecté en tant qu'Admin*\n\n` +
+      `📝 Vente : \`Nom, Tel, Produit, Prix, Quantité\`\n` +
+      `🖼️ Photo reçu : envoie l'image\n` +
+      `💬 Langage naturel : "J'ai vendu 2 soft à Marie"\n\n` +
+      `📊 \`commandes\` → ventes du jour\n` +
+      `📅 \`mois\` → CA du mois\n` +
+      `📈 \`stats\` → statistiques globales\n` +
+      `📦 \`stock\` → état du stock\n\n` +
+      `🔴 \`deconnexion\` → se déconnecter`;
+  }
+  if (role === "manager") {
+    return `📊 *Connecté en tant que Manager*\n\n` +
+      `📊 \`commandes\` → ventes du jour\n` +
+      `📅 \`mois\` → CA du mois\n` +
+      `📈 \`stats\` → statistiques globales\n` +
+      `📦 \`stock\` → état du stock\n\n` +
+      `🔴 \`deconnexion\` → se déconnecter`;
+  }
+  if (role === "vendeur") {
+    return `🛒 *Connecté en tant que Vendeur*\n\n` +
+      `📝 Vente : \`Nom, Tel, Produit, Prix, Quantité\`\n` +
+      `🖼️ Photo reçu : envoie l'image\n` +
+      `💬 Langage naturel : "J'ai vendu 2 soft à Marie"\n\n` +
+      `🔴 \`deconnexion\` → se déconnecter`;
   }
 }
 
@@ -284,9 +312,18 @@ app.post("/webhook", async (req, res) => {
     const message = req.body.message;
     if (!message) return;
     const chatId = message.chat.id;
+    const role   = getRole(chatId);
 
     // ── IMAGES ────────────────────────────────────────────────────
     if (message.photo) {
+      if (!role) {
+        await sendTelegram(chatId, "🔒 Connecte-toi d'abord avec ton mot de passe.");
+        return;
+      }
+      if (!peutFaire(chatId, "vente")) {
+        await sendTelegram(chatId, "🚫 Tu n'as pas la permission d'enregistrer des ventes.");
+        return;
+      }
       await sendTelegram(chatId, "🖼️ Image reçue, analyse en cours...");
       try {
         const photo = message.photo[message.photo.length - 1];
@@ -294,9 +331,7 @@ app.post("/webhook", async (req, res) => {
         const result = await analyzeImage(base64, mimeType);
 
         if (!result.ventes || result.ventes.length === 0) {
-          await sendTelegram(chatId,
-            `🖼️ Aucune vente détectée.\n${result.notes ? `Je vois : ${result.notes}` : ""}\n\nEnvoie manuellement : \`Nom, Tel, Produit, Prix, Quantité\``
-          );
+          await sendTelegram(chatId, `🖼️ Aucune vente détectée.\n\nEnvoie manuellement : \`Nom, Tel, Produit, Prix, Quantité\``);
           return;
         }
 
@@ -311,32 +346,26 @@ app.post("/webhook", async (req, res) => {
           totalGlobal   += montant;
 
           const saleResult = await callSheet("add_sale", {
-            nom_complet:   String(vente.nom || "Inconnu").trim(),
-            telephone:     String(vente.telephone || "").trim(),
-            produit:       String(vente.produit).trim(),
-            prix_unitaire: prix,
-            quantite:      quantite,
+            nom_complet: String(vente.nom || "Inconnu").trim(),
+            telephone:   String(vente.telephone || "").trim(),
+            produit:     String(vente.produit).trim(),
+            prix_unitaire: prix, quantite,
           });
 
           if (saleResult.status === "ok") {
             msg += `👤 *${vente.nom || "Inconnu"}*`;
             if (vente.telephone) msg += ` | 📞 ${vente.telephone}`;
             msg += `\n📦 ${vente.produit} × ${quantite} × ${prix.toLocaleString("fr-FR")} = *${montant.toLocaleString("fr-FR")}*\n\n`;
-
-            // ✅ Vérifier alerte stock après chaque vente
             await checkStockAlerte(chatId, vente.produit);
           }
         }
 
-        if (result.ventes.length > 1)
-          msg += `💰 *Total : ${totalGlobal.toLocaleString("fr-FR")}*`;
-        if (result.notes) msg += `\n\n📝 _${result.notes}_`;
-
+        if (result.ventes.length > 1) msg += `💰 *Total : ${totalGlobal.toLocaleString("fr-FR")}*`;
         await sendTelegram(chatId, msg);
 
       } catch (e) {
         console.error("❌ Image:", e.message);
-        await sendTelegram(chatId, "⚠️ Impossible de lire l'image. Envoie manuellement.");
+        await sendTelegram(chatId, "⚠️ Impossible de lire l'image.");
       }
       return;
     }
@@ -344,33 +373,52 @@ app.post("/webhook", async (req, res) => {
     // ── TEXTES ────────────────────────────────────────────────────
     if (!message.text) return;
     const text = message.text.trim();
-    console.log("📩", text);
+    console.log("📩", text, "| role:", role || "non connecté");
 
     // /start
     if (text === "/start") {
+      delete sessions[chatId];
       userMemory[chatId] = [];
       await sendTelegram(chatId,
-        `👋 *Bonjour ! Je suis votre assistant commercial.*\n\n` +
-        `📝 *Vente rapide :* \`Nom, Tel, Produit, Prix, Quantité\`\n` +
-        `🖼️ *Photo reçu :* envoie l'image directement\n` +
-        `💬 *Langage naturel :* "J'ai vendu 2 soft à Marie pour 15000"\n\n` +
-        `📊 \`commandes\` → ventes du jour\n` +
-        `📅 \`mois\` → CA du mois\n` +
-        `📈 \`stats\` → statistiques globales\n` +
-        `📦 \`stock\` → état du stock`
+        `👋 *Bonjour ! Bienvenue sur le bot commercial.*\n\n🔐 Entrez votre mot de passe pour vous connecter.`
       );
       return;
     }
 
+    // Déconnexion
+    if (text.toLowerCase() === "deconnexion") {
+      delete sessions[chatId];
+      userMemory[chatId] = [];
+      await sendTelegram(chatId, "👋 Déconnecté. Entrez votre mot de passe pour vous reconnecter.");
+      return;
+    }
+
+    // Vérifier mot de passe si non connecté
+    if (!role) {
+      const roleDetecte = MOTS_DE_PASSE[text];
+      if (roleDetecte) {
+        sessions[chatId] = { role: roleDetecte };
+        await sendTelegram(chatId, menuParRole(roleDetecte));
+      } else {
+        await sendTelegram(chatId, "🔒 Mot de passe incorrect. Réessaie.");
+      }
+      return;
+    }
+
+    // ── COMMANDES PAR RÔLE ────────────────────────────────────────
+
     // stock
     if (text.toLowerCase() === "stock") {
+      if (!peutFaire(chatId, "stock")) {
+        await sendTelegram(chatId, "🚫 Accès non autorisé.");
+        return;
+      }
       const data = await callSheet("stock");
       let msg = `📦 *Stock actuel :*\n\n`;
       (data.stock || []).forEach(s => {
-        const restant = s.quantite_restante;
-        const e = restant <= 0 ? "🚨" : restant <= SEUIL_ALERTE ? "🔴" : restant <= 10 ? "🟡" : "🟢";
-        msg += `${e} *${s.produit.toUpperCase()}* : ${restant} restant`;
-        msg += ` _(initial: ${s.stock_initial} | vendu: ${s.vendu})_\n`;
+        const r = s.quantite_restante;
+        const e = r <= 0 ? "🚨" : r <= SEUIL_ALERTE ? "🔴" : r <= 10 ? "🟡" : "🟢";
+        msg += `${e} *${s.produit.toUpperCase()}* : ${r} restant _(initial: ${s.stock_initial} | vendu: ${s.vendu})_\n`;
       });
       await sendTelegram(chatId, msg);
       return;
@@ -378,12 +426,16 @@ app.post("/webhook", async (req, res) => {
 
     // commandes du jour
     if (text.toLowerCase() === "commandes") {
-      const data = await callSheet("today_sales");
-      if (data.total_ventes === 0) {
-        await sendTelegram(chatId, "📊 Aucune vente enregistrée aujourd'hui.");
+      if (!peutFaire(chatId, "commandes")) {
+        await sendTelegram(chatId, "🚫 Accès non autorisé.");
         return;
       }
-      let msg = `📊 *Ventes du ${data.date}*\n🔢 *${data.total_ventes}* ventes | 💰 *${Number(data.total_montant).toLocaleString("fr-FR")}*\n\n`;
+      const data = await callSheet("today_sales");
+      if (data.total_ventes === 0) {
+        await sendTelegram(chatId, "📊 Aucune vente aujourd'hui.");
+        return;
+      }
+      let msg = `📊 *Ventes du ${data.date}*\n🔢 *${data.total_ventes}* | 💰 *${Number(data.total_montant).toLocaleString("fr-FR")}*\n\n`;
       for (const [p, v] of Object.entries(data.par_produit || {}))
         msg += `📦 ${p} : ${v.quantite} unités — ${Number(v.montant).toLocaleString("fr-FR")}\n`;
       msg += `\n📋 *Détail :*\n`;
@@ -394,17 +446,21 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    // CA du mois
+    // mois
     if (text.toLowerCase() === "mois") {
+      if (!peutFaire(chatId, "mois")) {
+        await sendTelegram(chatId, "🚫 Accès non autorisé.");
+        return;
+      }
       const now  = new Date();
       const data = await callSheet("month_stats", { mois: now.getMonth() + 1, annee: now.getFullYear() });
       if (data.total_ventes === 0) {
         await sendTelegram(chatId, `📅 Aucune vente ce mois (${data.mois} ${data.annee}).`);
         return;
       }
-      let msg = `📅 *${data.mois} ${data.annee}*\n🔢 *${data.total_ventes}* ventes | 💰 *${Number(data.total_montant).toLocaleString("fr-FR")}*\n\n`;
+      let msg = `📅 *${data.mois} ${data.annee}*\n🔢 *${data.total_ventes}* | 💰 *${Number(data.total_montant).toLocaleString("fr-FR")}*\n\n`;
       for (const [p, v] of Object.entries(data.par_produit || {}))
-        msg += `📦 ${p} : ${v.quantite} unités — ${Number(v.montant).toLocaleString("fr-FR")}\n`;
+        msg += `📦 ${p} : ${v.quantite} — ${Number(v.montant).toLocaleString("fr-FR")}\n`;
       msg += `\n📋 *Par jour :*\n`;
       for (const [jour, v] of Object.entries(data.par_jour || {}))
         msg += `  ${jour} : ${v.ventes} vente(s) — ${Number(v.montant).toLocaleString("fr-FR")}\n`;
@@ -412,18 +468,28 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    // stats globales
+    // stats
     if (text.toLowerCase() === "stats") {
+      if (!peutFaire(chatId, "stats")) {
+        await sendTelegram(chatId, "🚫 Accès non autorisé.");
+        return;
+      }
       const data = await callSheet("all_stats");
-      let msg = `📈 *Statistiques globales*\n🔢 *${data.total_ventes}* ventes | 💰 *${Number(data.total_montant).toLocaleString("fr-FR")}*\n\n`;
+      let msg = `📈 *Statistiques globales*\n🔢 *${data.total_ventes}* | 💰 *${Number(data.total_montant).toLocaleString("fr-FR")}*\n\n`;
       for (const [p, v] of Object.entries(data.par_produit || {}))
-        msg += `📦 ${p} : ${v.quantite} unités — ${Number(v.montant).toLocaleString("fr-FR")}\n`;
+        msg += `📦 ${p} : ${v.quantite} — ${Number(v.montant).toLocaleString("fr-FR")}\n`;
       await sendTelegram(chatId, msg);
       return;
     }
 
-    // Format CSV : Nom, Tel, Produit, Prix, Quantité
+    // ── VENTES (admin et vendeur uniquement) ──────────────────────
+
+    // Format CSV
     if (text.includes(",")) {
+      if (!peutFaire(chatId, "vente")) {
+        await sendTelegram(chatId, "🚫 Tu n'as pas la permission d'enregistrer des ventes.");
+        return;
+      }
       const parts = text.split(",").map(p => p.trim());
       if (parts.length >= 5) {
         const [nom, tel, produit, prix, quantite] = parts;
@@ -431,17 +497,12 @@ app.post("/webhook", async (req, res) => {
         const qN = toInt(quantite);
         if (nom && produit && pN > 0 && qN > 0) {
           const result = await callSheet("add_sale", {
-            nom_complet:   nom,
-            telephone:     tel,
-            produit:       produit,
-            prix_unitaire: pN,
-            quantite:      qN,
+            nom_complet: nom, telephone: tel, produit, prix_unitaire: pN, quantite: qN,
           });
           if (result.status === "ok") {
             await sendTelegram(chatId,
               `✅ *Vente enregistrée !*\n\n👤 ${nom}\n📞 ${tel}\n📦 ${produit}\n💲 ${pN.toLocaleString("fr-FR")}\n🔢 ${qN}\n💰 *${(pN * qN).toLocaleString("fr-FR")}*`
             );
-            // ✅ Alerte stock
             await checkStockAlerte(chatId, produit);
           } else {
             await sendTelegram(chatId, "⚠️ Erreur enregistrement.");
@@ -451,31 +512,39 @@ app.post("/webhook", async (req, res) => {
       }
     }
 
-    // Langage naturel — vente ?
-    const extracted = await extractSale(text);
-    if (extracted.is_sale && extracted.produit && extracted.prix_unitaire && extracted.quantite) {
-      const pN = toFloat(extracted.prix_unitaire);
-      const qN = toInt(extracted.quantite);
-      const result = await callSheet("add_sale", {
-        nom_complet:   String(extracted.nom || "Inconnu").trim(),
-        telephone:     String(extracted.telephone || "").trim(),
-        produit:       String(extracted.produit).trim(),
-        prix_unitaire: pN,
-        quantite:      qN,
-      });
-      if (result.status === "ok") {
-        let msg = `✅ *Vente enregistrée !*\n\n👤 ${extracted.nom || "Inconnu"}\n📦 ${extracted.produit}\n💲 ${pN.toLocaleString("fr-FR")}\n🔢 ${qN}\n💰 *${(pN * qN).toLocaleString("fr-FR")}*`;
-        if (!extracted.telephone) msg += `\n\n⚠️ _Téléphone manquant._`;
-        await sendTelegram(chatId, msg);
-        // ✅ Alerte stock
-        await checkStockAlerte(chatId, extracted.produit);
+    // Langage naturel
+    if (peutFaire(chatId, "vente")) {
+      const extracted = await extractSale(text);
+      if (extracted.is_sale && extracted.produit && extracted.prix_unitaire && extracted.quantite) {
+        const pN = toFloat(extracted.prix_unitaire);
+        const qN = toInt(extracted.quantite);
+        const result = await callSheet("add_sale", {
+          nom_complet: String(extracted.nom || "Inconnu").trim(),
+          telephone:   String(extracted.telephone || "").trim(),
+          produit:     String(extracted.produit).trim(),
+          prix_unitaire: pN, quantite: qN,
+        });
+        if (result.status === "ok") {
+          let msg = `✅ *Vente enregistrée !*\n\n👤 ${extracted.nom || "Inconnu"}\n📦 ${extracted.produit}\n💲 ${pN.toLocaleString("fr-FR")}\n🔢 ${qN}\n💰 *${(pN * qN).toLocaleString("fr-FR")}*`;
+          if (!extracted.telephone) msg += `\n\n⚠️ _Téléphone manquant._`;
+          await sendTelegram(chatId, msg);
+          await checkStockAlerte(chatId, extracted.produit);
+        }
+        return;
       }
+    }
+
+    // Question libre → GPT (admin et manager uniquement)
+    if (peutFaire(chatId, "gpt")) {
+      const reply = await askGPT(chatId, text);
+      await sendTelegram(chatId, reply);
       return;
     }
 
-    // Question libre → GPT avec données réelles
-    const reply = await askGPT(chatId, text);
-    await sendTelegram(chatId, reply);
+    // Vendeur qui tape autre chose
+    await sendTelegram(chatId,
+      `🛒 *Mode Vendeur*\n\nEnregistre une vente :\n\`Nom, Tel, Produit, Prix, Quantité\`\n\nou envoie une photo du reçu.`
+    );
 
   } catch (err) {
     console.error("❌ Webhook:", err.message);
