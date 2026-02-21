@@ -184,7 +184,7 @@ async function askGPT(chatId, userText) {
       const [todaySales, allStats, stock, monthStats] = await Promise.all([
         callSheet("today_sales"),
         callSheet("all_stats"),
-        callSheet("stock"),
+        callSheet("STOCK"),
         callSheet("month_stats", { mois: now.getMonth() + 1, annee: now.getFullYear() }),
       ]);
 
@@ -364,7 +364,7 @@ app.post("/webhook", async (req, res) => {
 
     // stock
     if (text.toLowerCase() === "stock") {
-      const data = await callSheet("stock");
+      const data = await callSheet("STOCK");
       let msg = `📦 *Stock actuel :*\n\n`;
       (data.stock || []).forEach(s => {
         const restant = s.quantite_restante;
