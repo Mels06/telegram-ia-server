@@ -376,25 +376,15 @@ app.post("/webhook", async (req, res) => {
     const text = message.text.trim();
     console.log("📩", text, "| role:", role || "non connecté");
 
-    // /start
-    if (text === "/start") {
+    // /start ou déconnexion — TOUJOURS traité en premier
+    if (text === "/start" || text.toLowerCase() === "deconnexion") {
       delete sessions[chatId];
       userMemory[chatId] = [];
-      await sendTelegram(chatId,
-        `👋 *Bonjour ! Bienvenue sur le bot commercial.*\n\n🔐 Entrez votre mot de passe pour vous connecter.`
-      );
+      await sendTelegram(chatId, "👋 Déconnecté. Entrez votre mot de passe pour vous connecter.");
       return;
     }
 
-    // Déconnexion
-    if (text.toLowerCase() === "deconnexion") {
-      delete sessions[chatId];
-      userMemory[chatId] = [];
-      await sendTelegram(chatId, "👋 Déconnecté. Entrez votre mot de passe pour vous reconnecter.");
-      return;
-    }
-
-    // Vérifier mot de passe si non connecté
+    // Si non connecté → vérifier mot de passe
     if (!role) {
       const roleDetecte = MOTS_DE_PASSE[text];
       if (roleDetecte) {
