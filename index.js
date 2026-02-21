@@ -337,7 +337,8 @@ app.post("/webhook", async (req, res) => {
     console.log("📩", text, "| role:", role || "non connecté");
 
     // ✅ TOUJOURS en premier : déconnexion et /start
-    if (text === "/start" || text.toLowerCase() === "deconnexion") {
+    const textNorm = text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    if (text === "/start" || textNorm.includes("deconnex") || textNorm.includes("logout") || textNorm.includes("se deconnecter") || textNorm.includes("quitter")) {
       deconnecter(chatId);
       await sendTelegram(chatId, "👋 Bonjour ! Entrez votre mot de passe pour vous connecter.");
       return;
