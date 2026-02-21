@@ -257,12 +257,25 @@ async function askGPT(chatId, userText) {
 // ==============================
 // DÉTECTER VENTE LANGAGE NATUREL
 // ==============================
-async function extractSale(text) {
+async function extractSale(text, catalogue = []) {
   try {
+    const catalogueStr = catalogue.length > 0
+      ? `\n\nCATALOGUE PRODUITS (utilise ces prix si le prix n\'est pas mentionné) :\n` +
+        catalogue.map(p => `- ${p.produit} : ${p.prix_unitaire} FCFA`).join("\n")
+      : "";
+
     const r = await client.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
-        { role: "system", content: `Analyse si c'est une vente. Si oui: {"is_sale":true,"nom":"...","telephone":"...","produit":"...","prix_unitaire":0,"quantite":0} Si non: {"is_sale":false} UNIQUEMENT le JSON.` },
+        { role: "system", content: `Tu es un assistant commercial. Analyse si le message est une vente.
+L\'ordre des informations peut être n\'importe lequel (nom, téléphone, produit, quantité, prix dans n\'importe quel ordre).
+Si le prix n\'est pas mentionné, utilise le prix du catalogue.
+Si le produit ressemble à un produit du catalogue (même partiel, même casse différente), utilise le nom officiel du catalogue.${catalogueStr}
+
+Si c\'est une vente, retourne :
+{"is_sale":true,"nom":"...","telephone":"...","produit":"NOM_OFFICIEL_DU_CATALOGUE","prix_unitaire":0,"quantite":0}
+Si non : {"is_sale":false}
+UNIQUEMENT le JSON.` },
         { role: "user", content: text }
       ],
     });
@@ -408,22 +421,32 @@ app.post("/webhook", async (req, res) => {
     // ── VENTES ────────────────────────────────────────────────────
     if (peutFaire(chatId, "vente")) {
 
-      // Format CSV
+      // Format CSV (ordre flexible, prix optionnel si produit connu)
       if (text.includes(",")) {
         const parts = text.split(",").map(p => p.trim());
-        if (parts.length >= 5) {
-          const [nom, tel, produit, prix, quantite] = parts;
-          const pN = toFloat(prix);
-          const qN = toInt(quantite);
-          if (nom && produit && pN > 0 && qN > 0) {
-            await enregistrerVente(chatId, nom, tel, produit, pN, qN);
+        if (parts.length >= 4) {
+          // Récupérer catalogue pour prix automatique
+          let cat = [];
+          try { const sd = await callSheet("stock"); if (sd.status==="ok") cat = sd.stock||[]; } catch(e) {}
+
+          // Passer par GPT pour détecter ordre flexible + prix auto
+          const extracted = await extractSale(text, cat);
+          if (extracted.is_sale && extracted.produit && extracted.prix_unitaire && extracted.quantite) {
+            const pN = toFloat(extracted.prix_unitaire);
+            const qN = toInt(extracted.quantite);
+            await enregistrerVente(chatId, extracted.nom, extracted.telephone, extracted.produit, pN, qN);
             return;
           }
         }
       }
 
       // Langage naturel
-      const extracted = await extractSale(text);
+      let catalogue = [];
+      try {
+        const stockData = await callSheet("stock");
+        if (stockData.status === "ok") catalogue = stockData.stock || [];
+      } catch(e) {}
+      const extracted = await extractSale(text, catalogue);
       if (extracted.is_sale && extracted.produit && extracted.prix_unitaire && extracted.quantite) {
         const pN = toFloat(extracted.prix_unitaire);
         const qN = toInt(extracted.quantite);
