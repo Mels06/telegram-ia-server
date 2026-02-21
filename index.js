@@ -25,7 +25,7 @@ const MOTS_DE_PASSE = {
 const PERMISSIONS = {
   admin:   ["vente", "commandes", "stats", "stock", "mois", "gpt"],
   manager: ["vente", "commandes", "stats", "stock", "mois", "gpt"],
-  vendeur: ["vente"],
+  vendeur: ["vente", "stock"],
 };
 
 // ==============================
@@ -297,6 +297,7 @@ function menuParRole(role) {
       `📝 Vente : \`Nom, Tel, Produit, Prix, Quantité\`\n` +
       `🖼️ Photo reçu : envoie l'image\n` +
       `💬 Langage naturel : "J'ai vendu 2 soft à Marie"\n\n` +
+      `📦 \`stock\` → voir stock et prix des produits\n\n` +
       `🔴 \`deconnexion\` → se déconnecter`;
   }
 }
