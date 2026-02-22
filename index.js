@@ -8,7 +8,7 @@ app.use(express.json());
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const SCRIPT_URL     = "https://script.google.com/macros/s/AKfycbzw2-ail03M79E_LZfwVT86NTpmls4UMrrE6rv8LBo4uVot4N-Dv6STTgOV4UlRZaS_Tg/exec";
+const SCRIPT_URL     = "https://script.google.com/macros/s/AKfycbwY2aXHhlYz5k_rs7MxVI7kp3t7JXMiF62mmgkODYPlTSyWNfjRydC2gAxPxKKSSe0nzw/exec";
 
 const client = new OpenAI({ apiKey: OPENAI_API_KEY });
 
@@ -24,8 +24,8 @@ const MOTS_DE_PASSE = {
 };
 
 const PERMISSIONS = {
-  admin:   ["vente", "commandes", "stats", "stock", "mois", "gpt"],
-  manager: ["vente", "commandes", "stats", "stock", "mois", "gpt"],
+  admin:   ["vente", "commandes", "stats", "stock", "mois", "gpt", "annuler", "vendeurs", "restock"],
+  manager: ["vente", "commandes", "stats", "stock", "mois", "gpt", "annuler", "vendeurs", "restock"],
   vendeur: ["vente", "stock"],
 };
 
@@ -298,7 +298,7 @@ UNIQUEMENT le JSON.` },
 function menuParRole(role) {
   const base = `📝 Vente : \`Nom, Tel, Produit, Prix, Quantité\`\n🖼️ Photo reçu : envoie l'image\n💬 Langage naturel : "J'ai vendu 2 soft à Marie"\n`;
   const stats = `📊 \`commandes\` → ventes du jour\n📅 \`mois\` → CA du mois\n📈 \`stats\` → statistiques globales\n`;
-  const stockCmd = `📦 \`stock\` → état du stock et prix\n`;
+  const stockCmd = `📦 \`stock\` → état du stock et prix\n📦 \`restock [produit] [qté]\` → réapprovisionner\n🗑️ \`annuler\` → annuler la dernière vente\n`;
   const deco = `\n🔴 \`deconnexion\` → se déconnecter`;
 
   if (role === "admin")   return `👑 *Connecté — Admin*\n\n${base}\n${stats}${stockCmd}${deco}`;
@@ -443,6 +443,111 @@ app.post("/webhook", async (req, res) => {
       let msg = `📈 *Stats globales*\n🔢 *${data.total_ventes}* | 💰 *${Number(data.total_montant).toLocaleString("fr-FR")}*\n\n`;
       for (const [p,v] of Object.entries(data.par_produit||{})) msg += `📦 ${p} : ${v.quantite} — ${Number(v.montant).toLocaleString("fr-FR")}\n`;
       await sendTelegram(chatId, msg);
+      return;
+    }
+
+    // annuler dernière vente
+    if (text.toLowerCase() === "annuler") {
+      if (!peutFaire(chatId, "annuler")) { await sendTelegram(chatId, "🚫 Accès refusé."); return; }
+      // Afficher la dernière vente pour confirmation
+      const todayData = await callSheet("today_sales");
+      if (!todayData.detail || todayData.detail.length === 0) {
+        await sendTelegram(chatId, "❌ Aucune vente à annuler aujourd'hui.");
+        return;
+      }
+      const last = todayData.detail[todayData.detail.length - 1];
+      sessions[chatId].pendingDelete = true;
+      await sendTelegram(chatId,
+        `⚠️ *Confirmer l'annulation ?*
+
+👤 ${last.nom||"?"}
+📦 ${last.produit}
+🔢 ${last.quantite}
+💰 ${Number(last.montant).toLocaleString("fr-FR")}
+
+✅ Tape \`confirmer\` pour annuler cette vente
+❌ Tape autre chose pour annuler`
+      );
+      return;
+    }
+
+    if (text.toLowerCase() === "confirmer" && sessions[chatId]?.pendingDelete) {
+      sessions[chatId].pendingDelete = false;
+      const result = await callSheet("delete_sale", {});
+      if (result.status === "ok") {
+        const s = result.supprime;
+        await sendTelegram(chatId,
+          `🗑️ *Vente annulée !*
+
+👤 ${s.nom}
+📦 ${s.produit}
+🔢 ${s.quantite}
+💰 ${Number(s.montant).toLocaleString("fr-FR")}
+
+📦 Stock remis à jour.`
+        );
+      } else {
+        await sendTelegram(chatId, "⚠️ Erreur lors de l'annulation.");
+      }
+      return;
+    }
+
+    // stats par vendeur
+    if (text.toLowerCase() === "vendeurs") {
+      if (!peutFaire(chatId, "vendeurs")) { await sendTelegram(chatId, "🚫 Accès refusé."); return; }
+      const data = await callSheet("vendor_stats");
+      if (!data.vendeurs || data.vendeurs.length === 0) {
+        await sendTelegram(chatId, "📊 Aucune donnée vendeur.");
+        return;
+      }
+      let msg = `👥 *Stats par client :*
+
+`;
+      data.vendeurs.slice(0, 10).forEach((v, i) => {
+        msg += `${i+1}. 👤 *${v.nom}*`;
+        if (v.telephone) msg += ` | 📞 ${v.telephone}`;
+        msg += `
+   🔢 ${v.total_ventes} achat(s) | 💰 ${Number(v.total_montant).toLocaleString("fr-FR")}
+`;
+        for (const [p, pv] of Object.entries(v.produits||{}))
+          msg += `   📦 ${p} : ${pv.quantite} unités
+`;
+        msg += "
+";
+      });
+      await sendTelegram(chatId, msg);
+      return;
+    }
+
+    // réapprovisionner stock
+    if (text.toLowerCase().startsWith("restock")) {
+      if (!peutFaire(chatId, "restock")) { await sendTelegram(chatId, "🚫 Accès refusé."); return; }
+      // Format : restock Soft 50
+      const parts = text.split(" ").filter(p => p.trim());
+      if (parts.length < 3) {
+        await sendTelegram(chatId, "📦 Format : `restock [produit] [quantité]`
+Ex: `restock Soft 50`");
+        return;
+      }
+      const quantiteStr = parts[parts.length - 1];
+      const produit     = parts.slice(1, -1).join(" ");
+      const quantite    = parseInt(quantiteStr, 10);
+      if (!produit || isNaN(quantite) || quantite <= 0) {
+        await sendTelegram(chatId, "⚠️ Format invalide. Ex: `restock Soft 50`");
+        return;
+      }
+      const result = await callSheet("restock", { produit, quantite });
+      if (result.status === "ok") {
+        await sendTelegram(chatId,
+          `✅ *Stock réapprovisionné !*
+
+📦 *${result.produit.toUpperCase()}*
+➕ Ajouté : ${result.quantite_ajoutee}
+📊 Nouveau stock initial : ${result.nouvel_initial}`
+        );
+      } else {
+        await sendTelegram(chatId, `⚠️ ${result.message || "Erreur restock."}`);
+      }
       return;
     }
 
