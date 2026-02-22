@@ -8,7 +8,7 @@ app.use(express.json());
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const SCRIPT_URL     = "https://script.google.com/macros/s/AKfycbwY2aXHhlYz5k_rs7MxVI7kp3t7JXMiF62mmgkODYPlTSyWNfjRydC2gAxPxKKSSe0nzw/exec";
+const SCRIPT_URL     = "https://script.google.com/macros/s/AKfycbzNR2mW0EfZkpe0vs51bIamrGkiUIIo64SdwWMu5rgs7ATYtIqccBTmIwWK8lTeYzr0Xg/exec";
 
 const client = new OpenAI({ apiKey: OPENAI_API_KEY });
 
@@ -471,20 +471,106 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    // modifier une vente - afficher les dernières ventes avec numéros
-    if (text.toLowerCase().includes("modifier") && (text.toLowerCase().includes("vente") || text.toLowerCase().includes("numero") || text.toLowerCase().includes("numéro") || text.toLowerCase().includes("telephone") || text.toLowerCase().includes("téléphone"))) {
+    // modifier une vente
+    if (text.toLowerCase().startsWith("modifier ")) {
       if (!peutFaire(chatId, "annuler")) { await sendTelegram(chatId, "🚫 Accès refusé."); return; }
-      // Stocker la demande de modification dans la session
-      sessions[chatId].pendingModif = text;
-      await sendTelegram(chatId,
-        `⚙️ *Modification détectée*
 
-Je transmets ta demande au système...
+      // Format 1 : "modifier Greg telephone 48474000"
+      // Format 2 : "modifier Greg" → affiche ses ventes pour choisir
+      const partsModif = text.split(" ").filter(p => p.trim());
 
-Pour modifier directement dans Google Sheet : ouvre la feuille VENTE et corrige la cellule concernée.
+      // Détecter champ connu dans le texte
+      const champsMap = {
+        "telephone": "telephone", "téléphone": "telephone", "tel": "telephone",
+        "nom": "nom", "produit": "produit", "prix": "prix", "quantite": "quantite", "quantité": "quantite"
+      };
+      let champDetecte = null;
+      let champIndex   = -1;
+      for (let i = 1; i < partsModif.length; i++) {
+        const w = partsModif[i].toLowerCase();
+        if (champsMap[w]) { champDetecte = champsMap[w]; champIndex = i; break; }
+      }
 
-Ou tape \`annuler\` pour annuler la dernière vente et la ressaisir correctement.`
-      );
+      if (champDetecte && champIndex > 0 && partsModif.length > champIndex + 1) {
+        // Format complet : modifier [nom] [champ] [valeur]
+        const nomRecherche = partsModif.slice(1, champIndex).join(" ");
+        const nouvelleVal  = partsModif.slice(champIndex + 1).join(" ");
+
+        const searchResult = await callSheet("search_sale", { nom: nomRecherche });
+        if (!searchResult.resultats || searchResult.resultats.length === 0) {
+          await sendTelegram(chatId, `❌ Aucune vente trouvée pour *${nomRecherche}*.`);
+          return;
+        }
+
+        // Si une seule vente → modifier directement
+        if (searchResult.resultats.length === 1) {
+          const vente  = searchResult.resultats[0];
+          const result = await callSheet("modify_sale", { ligne: vente.ligne, champ: champDetecte, valeur: nouvelleVal });
+          if (result.status === "ok") {
+            await sendTelegram(chatId,
+              `✅ *Modification effectuée !*
+
+👤 ${vente.nom} | ligne ${vente.ligne}
+📝 *${champDetecte}* : ${result.ancienne_valeur} → *${result.nouvelle_valeur}*`
+            );
+          } else {
+            await sendTelegram(chatId, `⚠️ Erreur : ${result.message}`);
+          }
+          return;
+        }
+
+        // Plusieurs ventes → demander laquelle
+        let msg = `🔍 *Plusieurs ventes trouvées pour "${nomRecherche}" :*
+
+`;
+        searchResult.resultats.slice(0, 5).forEach((v, i) => {
+          msg += `${i+1}. Ligne ${v.ligne} — ${v.produit} × ${v.quantite} — ${v.date}
+`;
+        });
+        msg += `
+Tape le numéro de ligne à modifier. Ex: \`modifier ligne ${searchResult.resultats[0].ligne} ${champDetecte} ${nouvelleVal}\``;
+        sessions[chatId].pendingSearch = searchResult.resultats;
+        await sendTelegram(chatId, msg);
+        return;
+      }
+
+      // Format direct : "modifier ligne 5 telephone 48474000"
+      if (partsModif[1]?.toLowerCase() === "ligne" && partsModif.length >= 5) {
+        const ligne = parseInt(partsModif[2], 10);
+        const champ = champsMap[partsModif[3]?.toLowerCase()] || partsModif[3];
+        const val   = partsModif.slice(4).join(" ");
+        const result = await callSheet("modify_sale", { ligne, champ, valeur: val });
+        if (result.status === "ok") {
+          await sendTelegram(chatId, `✅ *Modifié !*
+📝 *${champ}* : ${result.ancienne_valeur} → *${result.nouvelle_valeur}*`);
+        } else {
+          await sendTelegram(chatId, `⚠️ Erreur : ${result.message}`);
+        }
+        return;
+      }
+
+      // Juste un nom → chercher et afficher
+      const nomSeul = partsModif.slice(1).join(" ");
+      const searchRes = await callSheet("search_sale", { nom: nomSeul });
+      if (!searchRes.resultats || searchRes.resultats.length === 0) {
+        await sendTelegram(chatId, `❌ Aucune vente trouvée pour *${nomSeul}*.
+
+Formats disponibles :
+• \`modifier [nom] telephone [nouveau numero]\`
+• \`modifier [nom] produit [nouveau produit]\`
+• \`modifier [nom] quantite [nouvelle quantite]\``);
+        return;
+      }
+      let msg2 = `🔍 *Ventes de "${nomSeul}" :*
+
+`;
+      searchRes.resultats.slice(0, 5).forEach(v => {
+        msg2 += `📋 Ligne ${v.ligne} — ${v.produit} × ${v.quantite} — 📞 ${v.telephone} — ${v.date}
+`;
+      });
+      msg2 += `
+Ex: \`modifier ${nomSeul} telephone 48474000\``;
+      await sendTelegram(chatId, msg2);
       return;
     }
 
