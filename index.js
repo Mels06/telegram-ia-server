@@ -8,7 +8,7 @@ app.use(express.json());
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const SCRIPT_URL     = "https://script.google.com/macros/s/AKfycbwY2aXHhlYz5k_rs7MxVI7kp3t7JXMiF62mmgkODYPlTSyWNfjRydC2gAxPxKKSSe0nzw/exec";
+const SCRIPT_URL     = "https://script.google.com/macros/s/AKfycbwY2aXHhlYz5k_rs7MxVI7kp3t7JXMiF62mmgkODYPlTSyWNfjRydC2gAxPxKKSSe0nzw/execs";
 
 const client = new OpenAI({ apiKey: OPENAI_API_KEY });
 
@@ -507,13 +507,9 @@ app.post("/webhook", async (req, res) => {
         msg += `${i+1}. 👤 *${v.nom}*`;
         if (v.telephone) msg += ` | 📞 ${v.telephone}`;
         msg += `
-   🔢 ${v.total_ventes} achat(s) | 💰 ${Number(v.total_montant).toLocaleString("fr-FR")}
-`;
+   🔢 ${v.total_ventes} achat(s) | 💰 ${Number(v.total_montant).toLocaleString("fr-FR")}\n`;
         for (const [p, pv] of Object.entries(v.produits||{}))
-          msg += `   📦 ${p} : ${pv.quantite} unités
-`;
-        msg += "
-";
+          msg += `   📦 ${p} : ${pv.quantite} unités\n`;
       });
       await sendTelegram(chatId, msg);
       return;
@@ -525,8 +521,7 @@ app.post("/webhook", async (req, res) => {
       // Format : restock Soft 50
       const parts = text.split(" ").filter(p => p.trim());
       if (parts.length < 3) {
-        await sendTelegram(chatId, "📦 Format : `restock [produit] [quantité]`
-Ex: `restock Soft 50`");
+        await sendTelegram(chatId, '📦 Format : restock [produit] [quantité]\nEx: restock Soft 50');
         return;
       }
       const quantiteStr = parts[parts.length - 1];
