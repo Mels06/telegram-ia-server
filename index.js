@@ -446,8 +446,8 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    // annuler dernière vente
-    if (text.toLowerCase() === "annuler") {
+    // annuler/modifier une vente
+    if (text.toLowerCase().includes("annuler") || text.toLowerCase().includes("supprimer")) {
       if (!peutFaire(chatId, "annuler")) { await sendTelegram(chatId, "🚫 Accès refusé."); return; }
       // Afficher la dernière vente pour confirmation
       const todayData = await callSheet("today_sales");
@@ -467,6 +467,23 @@ app.post("/webhook", async (req, res) => {
 
 ✅ Tape \`confirmer\` pour annuler cette vente
 ❌ Tape autre chose pour annuler`
+      );
+      return;
+    }
+
+    // modifier une vente - afficher les dernières ventes avec numéros
+    if (text.toLowerCase().includes("modifier") && (text.toLowerCase().includes("vente") || text.toLowerCase().includes("numero") || text.toLowerCase().includes("numéro") || text.toLowerCase().includes("telephone") || text.toLowerCase().includes("téléphone"))) {
+      if (!peutFaire(chatId, "annuler")) { await sendTelegram(chatId, "🚫 Accès refusé."); return; }
+      // Stocker la demande de modification dans la session
+      sessions[chatId].pendingModif = text;
+      await sendTelegram(chatId,
+        `⚙️ *Modification détectée*
+
+Je transmets ta demande au système...
+
+Pour modifier directement dans Google Sheet : ouvre la feuille VENTE et corrige la cellule concernée.
+
+Ou tape \`annuler\` pour annuler la dernière vente et la ressaisir correctement.`
       );
       return;
     }
