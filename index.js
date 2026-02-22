@@ -8,7 +8,7 @@ app.use(express.json());
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const SCRIPT_URL     = "https://script.google.com/macros/s/AKfycbyfObQmU4Jvl9rwTED0YUpk6XzbG_rPLej_oS0SiDMg_Tz0IMkCtrbs5842ijG_U7rTzA/exec";
+const SCRIPT_URL     = "https://script.google.com/macros/s/AKfycbzw2-ail03M79E_LZfwVT86NTpmls4UMrrE6rv8LBo4uVot4N-Dv6STTgOV4UlRZaS_Tg/exec";
 
 const client = new OpenAI({ apiKey: OPENAI_API_KEY });
 
@@ -217,25 +217,34 @@ async function askGPT(chatId, userText) {
     let dataContext = "";
     try {
       const now = new Date();
-      const [todaySales, allStats, stock, monthStats] = await Promise.all([
+      const [todaySales, allStats, stock, monthStats, yesterdaySales] = await Promise.all([
         callSheet("today_sales"), callSheet("all_stats"),
         callSheet("stock"), callSheet("month_stats", { mois: now.getMonth()+1, annee: now.getFullYear() }),
+        callSheet("yesterday_sales"),
       ]);
       if (todaySales.status === "ok") {
         dataContext += `\n=== VENTES DU JOUR (${todaySales.date}) ===\nNombre: ${todaySales.total_ventes} | CA: ${todaySales.total_montant}\n`;
         for (const [p,v] of Object.entries(todaySales.par_produit||{})) dataContext += `  - ${p}: ${v.quantite} unités, ${v.montant}\n`;
+        dataContext += `\nDétail ventes du jour :\n`;
+        (todaySales.detail||[]).forEach(v => dataContext += `  • ${v.nom||"?"} (${v.telephone||"—"}) : ${v.quantite}x ${v.produit} = ${v.montant}\n`);
+      }
+      if (yesterdaySales && yesterdaySales.status === "ok" && yesterdaySales.total_ventes > 0) {
+        dataContext += `\n=== VENTES D'HIER (${yesterdaySales.date}) ===\nNombre: ${yesterdaySales.total_ventes} | CA: ${yesterdaySales.total_montant}\n`;
+        for (const [p,v] of Object.entries(yesterdaySales.par_produit||{})) dataContext += `  - ${p}: ${v.quantite} unités, ${v.montant}\n`;
       }
       if (monthStats.status === "ok") {
         dataContext += `\n=== CA DU MOIS (${monthStats.mois} ${monthStats.annee}) ===\nNombre: ${monthStats.total_ventes} | CA: ${monthStats.total_montant}\n`;
         for (const [p,v] of Object.entries(monthStats.par_produit||{})) dataContext += `  - ${p}: ${v.quantite} unités, ${v.montant}\n`;
       }
       if (allStats.status === "ok") {
-        dataContext += `\n=== STATS GLOBALES ===\nTotal: ${allStats.total_ventes} | CA: ${allStats.total_montant}\n`;
+        dataContext += `\n=== TOUTES LES VENTES (historique complet) ===\nTotal: ${allStats.total_ventes} | CA: ${allStats.total_montant}\n`;
         for (const [p,v] of Object.entries(allStats.par_produit||{})) dataContext += `  - ${p}: ${v.quantite} unités, ${v.montant}\n`;
+        dataContext += `\nDétail de TOUTES les ventes :\n`;
+        (allStats.detail||[]).forEach(v => dataContext += `  • ${v.nom||"?"} (${v.telephone||"—"}) : ${v.quantite}x ${v.produit} à ${v.prix} = ${v.montant} le ${v.date||""}\n`);
       }
       if (stock.status === "ok") {
         dataContext += `\n=== STOCK ===\n`;
-        (stock.stock||[]).forEach(s => dataContext += `  - ${s.produit}: ${s.quantite_restante} restant (initial:${s.stock_initial}|vendu:${s.vendu})\n`);
+        (stock.stock||[]).forEach(s => dataContext += `  - ${s.produit}: ${s.quantite_restante} restant (initial:${s.stock_initial}|vendu:${s.vendu}) | prix: ${s.prix_unitaire}\n`);
       }
     } catch(e) { console.error("⚠️ Données:", e.message); }
 
@@ -405,6 +414,25 @@ app.post("/webhook", async (req, res) => {
       for (const [p,v] of Object.entries(data.par_produit||{})) msg += `📦 ${p} : ${v.quantite} — ${Number(v.montant).toLocaleString("fr-FR")}\n`;
       msg += `\n📋 *Par jour :*\n`;
       for (const [jour,v] of Object.entries(data.par_jour||{})) msg += `  ${jour} : ${v.ventes} vente(s) — ${Number(v.montant).toLocaleString("fr-FR")}\n`;
+      await sendTelegram(chatId, msg);
+      return;
+    }
+
+    if (text.toLowerCase() === "hier") {
+      if (!peutFaire(chatId, "commandes")) { await sendTelegram(chatId, "🚫 Accès refusé."); return; }
+      const data = await callSheet("yesterday_sales");
+      if (data.total_ventes === 0) { await sendTelegram(chatId, "📊 Aucune vente hier."); return; }
+      let msg = `📊 *Ventes d'hier (${data.date})*
+🔢 *${data.total_ventes}* | 💰 *${Number(data.total_montant).toLocaleString("fr-FR")}*
+
+`;
+      for (const [p,v] of Object.entries(data.par_produit||{})) msg += `📦 ${p} : ${v.quantite} — ${Number(v.montant).toLocaleString("fr-FR")}
+`;
+      msg += `
+📋 *Détail :*
+`;
+      (data.detail||[]).forEach((v,i) => msg += `${i+1}. ${v.nom||"?"} — ${v.quantite}x ${v.produit} — ${Number(v.montant).toLocaleString("fr-FR")}
+`);
       await sendTelegram(chatId, msg);
       return;
     }
