@@ -8,7 +8,7 @@ app.use(express.json());
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const SCRIPT_URL     = "https://script.google.com/macros/s/AKfycbwY2aXHhlYz5k_rs7MxVI7kp3t7JXMiF62mmgkODYPlTSyWNfjRydC2gAxPxKKSSe0nzw/execs";
+const SCRIPT_URL     = "https://script.google.com/macros/s/AKfycbwY2aXHhlYz5k_rs7MxVI7kp3t7JXMiF62mmgkODYPlTSyWNfjRydC2gAxPxKKSSe0nzw/exec";
 
 const client = new OpenAI({ apiKey: OPENAI_API_KEY });
 
@@ -559,11 +559,13 @@ app.post("/webhook", async (req, res) => {
 
           // Passer par GPT pour détecter ordre flexible + prix auto
           const extracted = await extractSale(text, cat);
-          if (extracted.is_sale && extracted.produit && extracted.prix_unitaire && extracted.quantite) {
+          if (extracted.is_sale && extracted.produit && extracted.quantite) {
             const pN = toFloat(extracted.prix_unitaire);
             const qN = toInt(extracted.quantite);
-            await enregistrerVente(chatId, extracted.nom, extracted.telephone, extracted.produit, pN, qN);
-            return;
+            if (pN > 0 && qN > 0) {
+              await enregistrerVente(chatId, extracted.nom, extracted.telephone, extracted.produit, pN, qN);
+              return;
+            }
           }
         }
       }
@@ -575,7 +577,7 @@ app.post("/webhook", async (req, res) => {
         if (stockData.status === "ok") catalogue = stockData.stock || [];
       } catch(e) {}
       const extracted = await extractSale(text, catalogue);
-      if (extracted.is_sale && extracted.produit && extracted.prix_unitaire && extracted.quantite) {
+      if (extracted.is_sale && extracted.produit && extracted.quantite) {
         const pN = toFloat(extracted.prix_unitaire);
         const qN = toInt(extracted.quantite);
         await enregistrerVente(chatId, extracted.nom, extracted.telephone, extracted.produit, pN, qN);
