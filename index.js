@@ -575,7 +575,8 @@ Pour supprimer une ligne précise, tape :
     }
 
 
-    if (text.toLowerCase() === "confirmer" && sessions[chatId]?.pendingDelete) {
+    const motsConfirmation = ["confirmer", "oui", "ok", "valider", "yes", "yep", "oui oui", "valide", "vas-y", "go", "d'accord", "daccord", "sure"];
+    if (motsConfirmation.some(m => text.toLowerCase().trim() === m) && sessions[chatId]?.pendingDelete) {
       sessions[chatId].pendingDelete = false;
       const ligne = sessions[chatId].pendingDeleteLigne || null;
       const result = await callSheet("delete_sale", ligne ? { ligne } : {});
@@ -594,6 +595,79 @@ Pour supprimer une ligne précise, tape :
       } else {
         await sendTelegram(chatId, "⚠️ Erreur lors de l'annulation.");
       }
+      return;
+    }
+
+    // modifier une vente en langage naturel
+    if (text.toLowerCase().includes("modif") || text.toLowerCase().startsWith("changer") || text.toLowerCase().startsWith("corriger") || text.toLowerCase().startsWith("rectifier")) {
+      if (!peutFaire(chatId, "annuler")) { await sendTelegram(chatId, "🚫 Accès refusé."); return; }
+
+      // GPT extrait : nom, champ, nouvelle valeur
+      let modifInfo = null;
+      try {
+        const gptModif = await client.chat.completions.create({
+          model: "gpt-4o-mini",
+          messages: [{
+            role: "system",
+            content: `Analyse cette demande de modification de vente. Retourne UNIQUEMENT ce JSON:
+{"nom":"nom du client","champ":"telephone|nom|produit|prix|quantite","valeur":"nouvelle valeur"}
+Exemples:
+- "modifier le numéro de Greg, 97970000 au lieu de 48474940" → {"nom":"Greg","champ":"telephone","valeur":"97970000"}
+- "changer le produit de Marie en SOFT" → {"nom":"Marie","champ":"produit","valeur":"SOFT"}
+- "corriger la quantité de Dave à 3" → {"nom":"Dave","champ":"quantite","valeur":"3"}
+Si impossible: {"nom":null}
+UNIQUEMENT le JSON.`
+          }, { role: "user", content: text }]
+        });
+        const raw = gptModif.choices[0].message.content.trim().replace(/\`\`\`json|\`\`\`/g, "");
+        modifInfo = JSON.parse(raw);
+      } catch(e) { modifInfo = { nom: null }; }
+
+      if (modifInfo?.nom && modifInfo?.champ && modifInfo?.valeur) {
+        const searchResult = await callSheet("search_sale", { nom: modifInfo.nom });
+        if (!searchResult.resultats || searchResult.resultats.length === 0) {
+          await sendTelegram(chatId, `❌ Aucune vente trouvée pour *${modifInfo.nom}*.`);
+          return;
+        }
+
+        if (searchResult.resultats.length === 1) {
+          const vente  = searchResult.resultats[0];
+          const result = await callSheet("modify_sale", { ligne: vente.ligne, champ: modifInfo.champ, valeur: modifInfo.valeur });
+          if (result.status === "ok") {
+            await sendTelegram(chatId, `✅ *Modifié !*\n\n👤 ${vente.nom} (ligne ${vente.ligne})\n📝 *${modifInfo.champ}* : ${result.ancienne_valeur} → *${result.nouvelle_valeur}*`);
+          } else {
+            await sendTelegram(chatId, `⚠️ Erreur : ${result.message}`);
+          }
+          return;
+        }
+
+        // Plusieurs ventes → afficher liste
+        let msgM = `🔍 *Plusieurs ventes pour "${modifInfo.nom}" :*\n\n`;
+        searchResult.resultats.slice(0, 5).forEach(v => {
+          msgM += `📋 Ligne ${v.ligne} — ${v.produit} × ${v.quantite} — ${v.date}\n`;
+        });
+        msgM += `\nTape : modifier ligne [numéro] ${modifInfo.champ} ${modifInfo.valeur}`;
+        await sendTelegram(chatId, msgM);
+        return;
+      }
+
+      // Format direct : "modifier ligne 5 telephone 48474000"
+      const ligneDirectMatch = text.match(/ligne\s+(\d+)\s+(\w+)\s+(.+)/i);
+      if (ligneDirectMatch) {
+        const champsMap = { "telephone": "telephone", "tel": "telephone", "nom": "nom", "produit": "produit", "prix": "prix", "quantite": "quantite", "quantité": "quantite" };
+        const ligne  = parseInt(ligneDirectMatch[1], 10);
+        const champ  = champsMap[ligneDirectMatch[2].toLowerCase()] || ligneDirectMatch[2];
+        const valeur = ligneDirectMatch[3];
+        const result = await callSheet("modify_sale", { ligne, champ, valeur });
+        if (result.status === "ok") {
+          await sendTelegram(chatId, `✅ *Modifié !*\n📝 *${champ}* : ${result.ancienne_valeur} → *${result.nouvelle_valeur}*`);
+        } else {
+          await sendTelegram(chatId, `⚠️ Erreur : ${result.message}`);
+        }
+        return;
+      }
+
+      await sendTelegram(chatId, `⚙️ *Comment modifier une vente :*\n\n\`modifier [nom] telephone [nouveau numéro]\`\n\`modifier [nom] produit [nouveau produit]\`\n\`modifier [nom] quantite [nouvelle quantité]\`\n\`modifier [nom] prix [nouveau prix]\`\n\nEx: \`modifier Greg telephone 97970000\``);
       return;
     }
 
