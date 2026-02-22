@@ -472,11 +472,53 @@ app.post("/webhook", async (req, res) => {
     }
 
     // modifier une vente
-    if (text.toLowerCase().startsWith("modifier ")) {
+    if (text.toLowerCase().includes("modifier") || text.toLowerCase().includes("changer") || text.toLowerCase().includes("corriger") || text.toLowerCase().includes("rectifier")) {
       if (!peutFaire(chatId, "annuler")) { await sendTelegram(chatId, "🚫 Accès refusé."); return; }
 
       // Format 1 : "modifier Greg telephone 48474000"
       // Format 2 : "modifier Greg" → affiche ses ventes pour choisir
+      // ✅ GPT extrait les infos de modification en langage naturel
+      let modifInfo = null;
+      try {
+        const gptModif = await client.chat.completions.create({
+          model: "gpt-4o-mini",
+          messages: [{
+            role: "system",
+            content: `Analyse cette demande de modification de vente. Retourne UNIQUEMENT ce JSON:
+{"nom":"nom du client","champ":"telephone|nom|produit|prix|quantite","valeur":"nouvelle valeur"}
+Si tu ne peux pas extraire les infos: {"nom":null}
+UNIQUEMENT le JSON.`
+          }, { role: "user", content: text }]
+        });
+        modifInfo = JSON.parse(gptModif.choices[0].message.content.trim().replace(/\`\`\`json|\`\`\`/g,""));
+      } catch(e) { modifInfo = { nom: null }; }
+
+      if (modifInfo?.nom && modifInfo?.champ && modifInfo?.valeur) {
+        const searchResult = await callSheet("search_sale", { nom: modifInfo.nom });
+        if (!searchResult.resultats || searchResult.resultats.length === 0) {
+          await sendTelegram(chatId, "❌ Aucune vente trouvée pour *" + modifInfo.nom + "*.");
+          return;
+        }
+        if (searchResult.resultats.length === 1) {
+          const vente = searchResult.resultats[0];
+          const result = await callSheet("modify_sale", { ligne: vente.ligne, champ: modifInfo.champ, valeur: modifInfo.valeur });
+          if (result.status === "ok") {
+            await sendTelegram(chatId, `✅ *Modifié !*\n\n👤 ${vente.nom}\n📝 *${modifInfo.champ}* : ${result.ancienne_valeur} → *${result.nouvelle_valeur}*`);
+          } else {
+            await sendTelegram(chatId, "⚠️ Erreur : " + result.message);
+          }
+          return;
+        }
+        // Plusieurs ventes → afficher liste
+        let msgM = `*Plusieurs ventes trouvées pour "${modifInfo.nom}" :*\n\n`;
+        searchResult.resultats.slice(0,5).forEach(v => {
+          msgM += `📋 Ligne ${v.ligne} — ${v.produit} × ${v.quantite} — ${v.date}\n`;
+        });
+        msgM += `\nTape : modifier ligne [numéro] ${modifInfo.champ} ${modifInfo.valeur}`;
+        await sendTelegram(chatId, msgM);
+        return;
+      }
+
       const partsModif = text.split(" ").filter(p => p.trim());
 
       // Détecter champ connu dans le texte
