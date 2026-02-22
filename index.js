@@ -446,9 +446,39 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
+    // supprimer une ligne précise
+    if (text.toLowerCase().startsWith("supprimer ligne ")) {
+      if (!peutFaire(chatId, "annuler")) { await sendTelegram(chatId, "🚫 Accès refusé."); return; }
+      const parts = text.split(" ");
+      const ligne = parseInt(parts[2], 10);
+      if (!ligne) { await sendTelegram(chatId, "⚠️ Format : supprimer ligne [numéro]"); return; }
+      const result = await callSheet("delete_sale", { ligne });
+      if (result.status === "ok") {
+        const s = result.supprime;
+        await sendTelegram(chatId, `🗑️ *Supprimé !*\n\n👤 ${s.nom}\n📦 ${s.produit}\n🔢 ${s.quantite}\n💰 ${Number(s.montant).toLocaleString("fr-FR")}\n\n📦 Stock remis à jour.`);
+      } else {
+        await sendTelegram(chatId, `⚠️ Erreur : ${result.message}`);
+      }
+      return;
+    }
+
     // annuler/supprimer une vente
     if (text.toLowerCase().includes("annuler") || text.toLowerCase().includes("supprimer")) {
       if (!peutFaire(chatId, "annuler")) { await sendTelegram(chatId, "🚫 Accès refusé."); return; }
+
+      // Détecter "supprimer ligne X" en priorité
+      const ligneMatch = text.match(/ligne\s+(\d+)/i);
+      if (ligneMatch) {
+        const ligneNum = parseInt(ligneMatch[1], 10);
+        const result = await callSheet("delete_sale", { ligne: ligneNum });
+        if (result.status === "ok") {
+          const s = result.supprime;
+          await sendTelegram(chatId, `🗑️ *Supprimé !*\n\n👤 ${s.nom}\n📦 ${s.produit}\n🔢 ${s.quantite}\n💰 ${Number(s.montant).toLocaleString("fr-FR")}\n\n📦 Stock remis à jour.`);
+        } else {
+          await sendTelegram(chatId, `⚠️ Ligne ${ligneNum} introuvable.`);
+        }
+        return;
+      }
 
       // Extraire un nom éventuel : "supprimer Greg", "annuler vente de Marie"
       const stopWords = ["annuler", "supprimer", "la", "le", "les", "une", "vente", "ventes", "de", "du"];
