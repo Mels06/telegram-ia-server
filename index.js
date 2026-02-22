@@ -8,7 +8,7 @@ app.use(express.json());
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const SCRIPT_URL     = "https://script.google.com/macros/s/AKfycbzNR2mW0EfZkpe0vs51bIamrGkiUIIo64SdwWMu5rgs7ATYtIqccBTmIwWK8lTeYzr0Xg/exec";
+const SCRIPT_URL     = "https://script.google.com/macros/s/AKfycbzAKFpnFcpAWRpeae9pcMgQV47-cpq9yLZaGGG_7G-54LQ_09mrthllqa-SjTuByOsLGQ/exec";
 
 const client = new OpenAI({ apiKey: OPENAI_API_KEY });
 
