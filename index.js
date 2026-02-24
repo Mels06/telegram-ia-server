@@ -269,21 +269,30 @@ async function askGPT(chatId, userText) {
 async function extractSale(text, catalogue = []) {
   try {
     const catalogueStr = catalogue.length > 0
-      ? `\n\nCATALOGUE PRODUITS (utilise ces prix si le prix n\'est pas mentionné) :\n` +
-        catalogue.map(p => `- ${p.produit} : ${p.prix_unitaire} FCFA`).join("\n")
+      ? `\n\nCATALOGUE PRODUITS :\n` +
+        catalogue.map(p => `- ${p.produit} : ${p.prix_unitaire} FCFA`).join("\n") +
+        `\n\nRÈGLES IMPORTANTES :
+1. Utilise TOUJOURS le nom EXACT du catalogue (ex: AGENDA pas Agendas, CARTABLE pas Cartables)
+2. Si le produit ressemble à un produit du catalogue (pluriel, faute, abréviation), utilise le nom officiel
+3. Si le prix n'est pas mentionné, utilise le prix du catalogue
+4. Correspondances : Stylos→STYLO, Agendas→AGENDA, Catables/Cartables→CARTABLE, Livres→LIVRE`
       : "";
 
     const r = await client.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
         { role: "system", content: `Tu es un assistant commercial. Analyse si le message est une vente.
-L\'ordre des informations peut être n\'importe lequel (nom, téléphone, produit, quantité, prix dans n\'importe quel ordre).
-Si le prix n\'est pas mentionné, utilise le prix du catalogue.
-Si le produit ressemble à un produit du catalogue (même partiel, même casse différente), utilise le nom officiel du catalogue.${catalogueStr}
+L'ordre des informations peut être n'importe lequel.
+RÈGLES :
+1. Utilise le nom EXACT du catalogue pour le produit (singulier, majuscules)
+2. Pluriels → singulier : Stylos→STYLO, Agendas→AGENDA, Catables→CARTABLE, Livres→LIVRE
+3. Si le prix n'est pas mentionné, prends-le dans le catalogue
+4. prix_unitaire doit être un NOMBRE, jamais 0 si le produit est dans le catalogue
+${catalogueStr}
 
-Si c\'est une vente, retourne :
-{"is_sale":true,"nom":"...","telephone":"...","produit":"NOM_OFFICIEL_DU_CATALOGUE","prix_unitaire":0,"quantite":0}
-Si non : {"is_sale":false}
+Retourne UNIQUEMENT ce JSON :
+{"is_sale":true,"nom":"...","telephone":"...","produit":"NOM_EXACT_CATALOGUE","prix_unitaire":NOMBRE,"quantite":NOMBRE}
+Ou si pas une vente : {"is_sale":false}
 UNIQUEMENT le JSON.` },
         { role: "user", content: text }
       ],
