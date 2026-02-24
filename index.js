@@ -192,15 +192,25 @@ async function getImageBase64(fileId) {
 // ==============================
 // ANALYSER IMAGE
 // ==============================
-async function analyzeImage(base64, mimeType) {
+async function analyzeImage(base64, mimeType, catalogue = []) {
   const response = await client.chat.completions.create({
     model: "gpt-4o",
     messages: [{ role: "user", content: [
       { type: "text", text: `Analyse cette image et extrais TOUTES les ventes.
+
+CATALOGUE OFFICIEL DES PRODUITS (utilise ces noms EXACTS et ces prix) :
+${catalogue.map(p => `- ${p.produit} : ${p.prix_unitaire} FCFA`).join("\n")}
+
+RÈGLES STRICTES :
+1. Utilise le nom EXACT du catalogue (ex: STYLO pas Stylos, CARTABLE pas Cartables/Catables)
+2. Si le prix n'est pas écrit sur l'image, prends-le OBLIGATOIREMENT dans le catalogue
+3. prix_unitaire est TOUJOURS un nombre > 0 si le produit est dans le catalogue
+4. quantite est toujours un nombre entier > 0
+
 Retourne UNIQUEMENT ce JSON :
-{"ventes":[{"nom":"...","telephone":"...","produit":"...","prix_unitaire":0,"quantite":0}],"notes":"..."}
-prix_unitaire et quantite sont des NOMBRES purs. Si aucune vente : {"ventes":[],"notes":"description"}
-UNIQUEMENT le JSON.` },
+{"ventes":[{"nom":"...","telephone":"...","produit":"NOM_EXACT_CATALOGUE","prix_unitaire":NOMBRE,"quantite":NOMBRE}],"notes":"..."}
+Si aucune vente détectée : {"ventes":[],"notes":"description"}
+UNIQUEMENT le JSON, rien d'autre.` },
       { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64}` } },
     ]}],
     max_tokens: 1000,
@@ -337,7 +347,10 @@ app.post("/webhook", async (req, res) => {
       try {
         const photo = message.photo[message.photo.length - 1];
         const { base64, mimeType } = await getImageBase64(photo.file_id);
-        const result = await analyzeImage(base64, mimeType);
+        // Récupérer catalogue pour que Vision connaisse les prix
+        let catalogue = [];
+        try { const sd = await callSheet("stock"); if (sd.status === "ok") catalogue = sd.stock || []; } catch(e) {}
+        const result = await analyzeImage(base64, mimeType, catalogue);
 
         if (!result.ventes || result.ventes.length === 0) {
           await sendTelegram(chatId, `🖼️ Aucune vente détectée.\n\nEnvoie manuellement : \`Nom, Tel, Produit, Prix, Quantité\``);
@@ -348,10 +361,34 @@ app.post("/webhook", async (req, res) => {
         let nbOk = 0;
         for (const vente of result.ventes) {
           if (!vente.produit) continue;
-          const prix = toFloat(vente.prix_unitaire);
-          const qte  = toInt(vente.quantite);
-          const ok   = await enregistrerVente(chatId, vente.nom, vente.telephone, vente.produit, prix, qte);
-          if (ok) { totalGlobal += prix * qte; nbOk++; }
+          let prix = toFloat(vente.prix_unitaire);
+          const qte = toInt(vente.quantite);
+
+          // ✅ Si prix = 0, chercher dans le catalogue par correspondance
+          if (prix === 0 && catalogue.length > 0) {
+            const prodNorm = String(vente.produit).toLowerCase().trim();
+            const match = catalogue.find(c => {
+              const cNorm = String(c.produit).toLowerCase().trim();
+              return cNorm === prodNorm
+                || cNorm === prodNorm + "s"
+                || prodNorm === cNorm + "s"
+                || cNorm.slice(0,-1) === prodNorm.slice(0,-1)
+                || cNorm.startsWith(prodNorm.slice(0,4))
+                || prodNorm.startsWith(cNorm.slice(0,4));
+            });
+            if (match) {
+              prix = toFloat(match.prix_unitaire);
+              vente.produit = match.produit; // utiliser nom officiel
+              console.log(`💲 Prix auto depuis catalogue: ${vente.produit} → ${prix}`);
+            }
+          }
+
+          if (qte > 0 && prix > 0) {
+            const ok = await enregistrerVente(chatId, vente.nom, vente.telephone, vente.produit, prix, qte);
+            if (ok) { totalGlobal += prix * qte; nbOk++; }
+          } else {
+            await sendTelegram(chatId, `⚠️ *${vente.produit}* : prix introuvable dans le catalogue. Ajoute-le dans la feuille STOCK.`);
+          }
         }
         if (nbOk > 1) await sendTelegram(chatId, `💰 *Total : ${totalGlobal.toLocaleString("fr-FR")}*`);
 
